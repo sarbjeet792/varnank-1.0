@@ -1,0 +1,10 @@
+{
+  "name": "Varnank Studios",
+  "description": "Privacy-first browser-side creative and document studios for Photo/Image, PDF, ID/Govt. ID, and Print & Publication workflows.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

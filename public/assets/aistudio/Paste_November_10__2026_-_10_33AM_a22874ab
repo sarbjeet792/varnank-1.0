@@ -1,0 +1,542 @@
+# MASTER PLAN / BLUEPRINT / MTS: PRIVACY-FIRST BROWSER-SIDE WEB PLATFORM
+# (CLOUDFLARE FREE PLAN + GITHUB)
+
+## ROLE
+You are a senior architect, security engineer, DevOps engineer and product designer.
+Build a complete web platform with me in strict phases. Do NOT write code until
+Phases 0 and 1 are approved. Flowcharts in Section F are the source of truth for flows;
+if text and a flowchart disagree, stop and ask me.
+
+## NON-NEGOTIABLE PRINCIPLES
+1. ZERO-UPLOAD CORE: every studio, tool and preset processes files 100% inside the user's
+   browser (WebAssembly, Web Workers, Canvas/WebGL, OPFS/IndexedDB). User files, previews
+   and outputs never leave the device. No file or file metadata ever reaches any server.
+2. MINIMAL CONTROL PLANE: a thin edge backend exists ONLY for accounts, sessions, sign-in,
+   plans and entitlements, pricing and offers, payment webhooks, gated delivery of paid tool
+   bundles, admin console data, audit logs and the secrets vault. It stores zero user files.
+   Be honest with me: payment confirmation, plan enforcement, sign-in, pricing, hidden admin
+   login and account erasure cannot be made secure with browser code alone. Explain this in Phase 1.
+3. CLOUDFLARE FREE PLAN ONLY: everything deploys on Cloudflare's free tier from GitHub. Before
+   choosing services, verify the CURRENT free-plan limits (requests per day, CPU time per
+   request, database size, storage, build count), list each with a risk note, and do not
+   assume limits from memory.
+4. FREE & OPEN SOURCE ONLY: every library must be OSS with a permissive license. Provide a
+   table: name, license, purpose, free-tier impact, alternative.
+5. HIDDEN TECHNICAL DETAILS: users and guests see only short, plain-language labels and
+   messages about what they can do. They never see how the platform works: no technology,
+   library or service names, versions, "powered by" text, architecture, security or
+   processing explanations, stack traces or raw error codes. Errors shown to users are
+   plain-language with a short reference ID only. No source maps in production, and no
+   technical comments or debug output in the public bundle. All technical information is
+   visible ONLY to eligible admins inside the admin console (Section R), limited to what
+   their role needs. Legally required notices (privacy, terms, consent) and the plain
+   currency note at signup stay, written in simple user language.
+6. PAID MEANS CONFIRMED: no paid/plan feature is usable until the payment gateway's webhook
+   has confirmed payment and the server has marked the plan ACTIVE (Section E and Section P).
+7. NO SECRETS IN DEVELOPMENT: zero real APIs, keys, tokens, client IDs or credentials in code,
+   comments, seeds, env examples, CI logs, commits or UI. Use mock adapters (payments, social
+   sign-in, email, SMS, storage) and clearly marked fake fixtures. Add secret-scanning and a
+   pre-commit check to block accidental commits.
+8. NO HARDCODED ACCOUNTS: no user/admin/super-user credentials anywhere in code or docs.
+9. WORKFLOW: ask category by category (max 6 questions per message), offer a recommended
+   default I can accept by replying "default", keep a Decision Log, and wait for "APPROVED"
+   after each phase. If a request is impossible or unsafe, say so and propose the correct method.
+10. NO LOCATION OR CURRENCY DETECTION: no IP, geolocation, browser-locale or other automatic
+    region/currency detection, and no currency selector anywhere. Currency is fixed once at
+    signup from the country code (Section C).
+11. NEUTRAL VISUALS AND NAMES: follow Section D (no personal or AI portraits, no real
+    person/place/thing names in sample content, original drawn/animated visuals only).
+
+---
+
+## PHASE 0: DISCOVERY QUESTIONNAIRE (ask me, in this order)
+A. Identity & Purpose: name, tagline, domain, problem solved, audience, regions, languages
+B. Theme & Branding: style, light/dark, colors, fonts, logo, tone, mobile-first layout, PWA/offline
+C. User Scope: who may use it, age limits, countries, B2C/B2B, expected traffic
+D. Studios: which studios, purpose and target users of each
+E. Tools: tool list per studio, free vs paid, per-tool limits
+F. Presets: types (sizes, templates, export profiles), who creates or edits them
+G. Functionings: core workflows, batch mode, local-only history, undo/redo, autosave
+H. Work Area: editor layout, drag-and-drop, gestures, shortcuts, temporary-storage rules
+I. Input & Output Options: accepted formats, size limits, import methods (file, camera,
+   clipboard), export formats, download/share methods, device-memory limits
+J. Privacy Options: data collected (target: minimum), consent, cookies, local-data wipe
+   controls, analytics opt-in/out, legal basis (DPDP Act India / GDPR)
+K. Security & Certifications: target alignment (OWASP ASVS, ISO 27001, SOC 2, DPDP Act);
+   certification itself needs an external audit; MFA policy; session rules
+L. Admin Categories: e.g. Finance, Support, Content/Presets, Tools/Studios, Security/Audit,
+   Integrations/Secrets, Offers/Pricing, plus custom ones; Super User scope
+M. User Plans: Guest, Freemium, Paid per-day, Paid, Premium; limits, tool access per plan,
+   validity, upgrade/downgrade/expiry/grace rules (prices are set later by admins, Section O)
+N. Payments: currencies supported by the gateway, GST/tax, invoices, refunds, failed payments, coupons
+O. Repository & Deployment: GitHub account/org, repo names, branch strategy, custom domain,
+   staging vs production, who may deploy
+P. Sign-in, Signup & Recovery: which methods (passkey, Google, Apple, X, email, phone,
+   password), whether each is optional or required, account linking, recovery preferences
+   (recovery codes, linked login, admin-assisted, email/phone code), and my decision on
+   Apple's paid membership and on SMS cost once you've shown me the facts
+Q. User Area: dashboard widgets, profile fields, account sections, which sections to
+   hide/show per plan and role, whether I need notices and a help/support section
+R. Country Codes, Currency & Offers: supported country codes and their currencies, fallback
+   currency, whether guests see prices (default: no, prices appear after signup), tax display,
+   offer types and templates I want
+S. Brand & Visuals: existing logo/favicon or an original vector monogram placeholder,
+   animated-drawing style (abstract, non-human), icon pack preference (default: one
+   permissive-license pack), and confirmation of the placeholder naming scheme
+
+---
+
+## PHASE 1: BLUEPRINT (no code)
+1. Architecture diagram: Zero-Upload Client Core vs Minimal Control Plane, plus a data-flow
+   map proving no user file ever leaves the browser
+2. Cloudflare free-plan fit report: each service, current free limit, expected usage, what
+   breaks at the limit, upgrade or exit path
+3. Open-source stack table
+4. Repository layout (Section G)
+5. Sitemap and user flows (guest → unified sign-in/up → upgrade → payment → webhook → activation)
+6. Control Plane data model
+7. Role & Permission Matrix (every role × every action)
+8. Plan & Entitlement Matrix (every plan × every tool/preset/limit × state)
+9. Entitlement enforcement design (Section E), with an honest list of what can and cannot
+   be bypassed, per plan
+10. Identity design (Section A): sign-in methods, account linking, recovery paths, and a
+    verified-at-this-moment table of what Google, Apple, X, email and SMS providers each
+    require for free use (registration, cost, review/approval, whether an email is returned)
+11. Threat model (STRIDE) including: forged success page, replayed webhook, token theft,
+    token sharing, tampered client, expired-plan reuse, OAuth state/redirect tampering,
+    account takeover via recovery, social-account hijack, duplicate accounts from linked
+    logins, account enumeration, country-code/currency abuse, price or offer tampering,
+    technical-detail leakage to users
+12. User area map (Section U): dashboard, profile, account, conditional sections, and their
+    show/hide rules per plan and role
+13. Country-code → currency table design, signup disclosure text, currency-lock rules (Section C)
+14. Plans/offers data model, admin template library and server-side price computation (Section O)
+15. Brand and visual pack, placeholder naming scheme (Section D)
+16. Keys and environment map (Section K): every key, its tier, who sets it, where, and when
+17. Flowcharts finalized (Section F)
+18. Phase-wise roadmap
+
+---
+
+## PHASE 2: FOUNDATION
+Repos, CI, config separation, mock adapters, secrets vault (Section S), identity and
+authentication (Section A), RBAC engine, entitlement service (Section E), country/currency
+mapping and pricing service (Sections C, O), append-only audit log, strict CSP and security
+headers, design tokens, brand pack and icon pack (Section D), production build that strips
+technical details from the public bundle.
+
+## PHASE 3: PUBLIC SITE & USER AREA
+Landing, studios, pricing, legal pages; guest mode with strict limits; unified sign-in/up
+screen and recovery screens; signup currency disclosure; user dashboard, profile and account
+(Section U). Plain-language UI only. Locked paid tools show a plain "Upgrade to unlock"
+state without exposing how they work.
+
+## PHASE 4: STUDIOS, TOOLS, PRESETS (BROWSER-SIDE)
+Build per my Phase 0 answers. Free tools ship in the public bundle. Paid tools are separate
+gated bundles (Section E). Heavy work in Web Workers, progress UI, graceful handling of
+low-memory phones, and no network calls during processing.
+
+## PHASE 5: PRICING, OFFERS & PAYMENTS (Sections O, P)
+## PHASE 6: ADMIN SYSTEM (Section R, including the offer and pricing manager)
+## PHASE 7: HARDENING & TESTING
+Security tests, role-escalation tests, webhook replay tests, price-tampering tests, enumeration
+tests, offline tests, accessibility, cross-device tests, backup/restore.
+- Technical-exposure test: inspect the public bundle, network responses, error pages and page
+  source as a guest and as a normal user, and confirm no technical detail, stack trace,
+  library name or version is visible.
+## PHASE 8: GUIDED KEYS SETUP & GO-LIVE (Sections G, K)
+
+---
+
+## SECTION A: IDENTITY, SIGNUP, SIGN-IN & RECOVERY
+
+### A1. Sign-in methods (modern, privacy-first)
+- ONE button, labeled "Sign in / Sign up", default mode SIGN IN. The same screen handles new
+  and existing users (Section F, chart 2). Responses are neutral so nobody can learn whether
+  an email or phone number is registered; a new account is created only after the identity is
+  proven, in a "complete sign-up" step.
+- Primary: passkeys (WebAuthn), phishing-resistant, no password needed.
+- Email or phone with country code: one-time verification code (or link) to prove ownership.
+  Phone numbers use a country-code picker; email users choose their country code in the
+  complete-sign-up step (Section C). Codes are short-lived, single-use, rate-limited.
+- Social sign-in: "Continue with Google / Apple / X" using OAuth 2.0 / OpenID Connect with
+  Authorization Code + PKCE, `state` and `nonce` validation, exact redirect-URI matching, and
+  server-side token exchange only in the control plane. Social tokens are never stored longer
+  than needed and never exposed to the browser beyond the session.
+- Optional password login: processed so the server never sees the plaintext (OPAQUE-style
+  protocol or client-side key derivation), because heavy server-side hashing may exceed the
+  free-plan CPU limit. Passwords are HASHED/derived, never encrypted. Verify feasibility first.
+- Minimal data: store only a provider-issued stable user ID or the verified email/phone, plus
+  the minimum profile fields I approve. Treat provider-returned email as unverified for X,
+  which may not return one.
+- Account linking: one account can link several methods, only after re-authentication.
+  Prevent duplicate accounts and takeover by an unverified email match.
+
+### A2. No keys in development, keys only by eligible admins
+- Development uses MOCK adapters that simulate Google, Apple, X, email and SMS flows,
+  including success, cancel, error, delay and "email not provided" cases.
+- Real provider credentials are added, rotated or revoked ONLY by an eligible admin (Super
+  User or Integrations/Secrets admin) in the console via the vault (Section S).
+- Until an admin enables a method, its option stays hidden. If a provider's credentials are
+  revoked, that method turns off instantly and users fall back to their other linked methods.
+- Be honest with me: Apple needs a paid developer membership, SMS has per-message cost and
+  local registration rules, and X's free tier and email availability may change. Show current
+  facts and let me decide before building those parts.
+
+### A3. Account and password recovery
+- Recovery must not depend on paid providers by default. Offer these layered paths, and I
+  choose which to enable:
+  1. Another linked social login or another registered passkey/device.
+  2. One-time recovery codes generated at signup, shown once, stored only as hashes, and
+     regenerable after sign-in.
+  3. Admin-assisted recovery: a Support admin verifies identity by a defined checklist, and
+     the Super User approves; every step is audit-logged, with a cooling-off delay and a
+     notification on every other active session.
+  4. Verified email/phone code, available once an eligible admin adds that provider key
+     through the vault.
+- Password reset (if passwords are enabled): only through a verified recovery path above,
+  invalidating all sessions and tokens after reset.
+- Anti-takeover rules: rate limits, delay windows for recovery, alerts on new devices, and no
+  recovery path that bypasses MFA for admins.
+- Recovery for admins and the Super User is stricter: no social-only recovery, and approval by
+  a second authorized person where more than one exists.
+
+### A4. Session, MFA and credentials
+- Short-lived access tokens, rotating refresh tokens, HttpOnly + Secure + SameSite cookies,
+  session/device list with remote logout, brute-force lockout, rate limiting.
+- TOTP or passkey MFA mandatory for every admin; optional but encouraged for users.
+- Separate login entry and session scope for users, each admin category and the Super User.
+  Admins sign in with passkey + MFA, not social, email or phone login.
+- Sensitive personal fields are encrypted at rest (AES-256-GCM, envelope keys).
+- First Super User: created by a one-time bootstrap process. Credentials are generated then,
+  shown ONLY in this chat/terminal once, stored nowhere in plain text, with a forced change on
+  first login. Later admin credentials are issued the same way.
+- ACCOUNT DELETION: immediately and permanently erase credentials, linked social IDs, email/
+  phone, recovery codes, sessions, tokens, preferences and personal data, and revoke
+  entitlement tokens. Keep only minimal anonymized payment/tax records if the law requires;
+  tell me exactly what applies in India.
+
+## SECTION C: COUNTRY CODE & CURRENCY
+- No detection and no selector (Principle 10). Currency is fixed ONCE, at signup:
+  - Phone signup: the country code comes from the number.
+  - Email or social signup: the user picks a country code in the complete-sign-up step.
+- An admin-managed table maps each country code to one currency, plus a fallback currency
+  for unmapped codes or currencies the gateway cannot process.
+- At signup, show the resulting currency with a short plain-language explanation, for example:
+  "Prices will be shown in [currency] because you selected [code]. This is set for your account."
+- After signup the currency is read-only everywhere (account page shows it with the same
+  explanation). Changes only by an eligible admin, with a reason, MFA re-auth and audit entry.
+- Guests see plans and features but no prices; prices appear after sign-in/sign-up
+  (confirm in Phase 0, category R).
+- Be honest with me: a country code is not proof of residence. Add mitigations: verified phone
+  where used, locked currency, admin review flags for unusual patterns, gateway billing checks,
+  and tax handling that does not rely on the code alone.
+
+## SECTION U: USER AREA (DASHBOARD, PROFILE, ACCOUNT)
+Every section below has working functions, server-enforced where it touches plans, security or
+data. Sections hide automatically when not applicable; hiding is a UX rule only and never
+changes what the server allows or breaks any operation.
+- HOME / DASHBOARD: current plan and status, expiry or renewal date, usage meters against plan
+  limits, quick launch to studios and tools, local-only recent activity (stays on the device,
+  with a clear button), upgrade prompt (hidden for the top plan), admin notices (hidden if none).
+- PROFILE: display name (placeholder-style handle allowed), illustrated avatar or initial-letter
+  avatar (no photo upload), language, theme (light/dark/system), preferences (defaults for
+  tools, units, export formats), notification preferences, linked sign-in methods with
+  add/remove, verified email/phone management.
+- ACCOUNT: plan and billing (current plan, upgrade/downgrade, renewal and cancel, payment
+  history, invoices, shown in the account currency), currency shown read-only with its
+  explanation, security (passkeys, sessions/devices with remote logout, MFA, recovery codes),
+  privacy (consent settings, export my data, wipe local data), and delete account with
+  re-authentication (immediate erasure per Section A4).
+- OTHER SECTIONS ONLY IF REQUIRED: Help/Support (contact and ticket status) and Usage history,
+  included only if I confirm in Phase 0, category Q. Billing is hidden for users who have
+  never purchased; Upgrade is hidden for the top plan.
+- Admins get a role-appropriate Profile, Settings, Preferences and Analytics in their console.
+
+## SECTION O: PLANS, OFFERS & PRICING (ADMIN-MANAGED)
+- Eligible admins (Offers/Pricing admin or Super User) set, per plan and per currency: base
+  price, discounted price and validity. The UI shows the base price slashed, the discounted
+  price, a savings label and modern offer buttons or badges (for example "Best value",
+  time-limited ribbon, countdown), kept tasteful and not overdone.
+- Offer builder: admin chooses the nature of the offer (percentage, flat amount, first
+  purchase, seasonal, time-limited, coupon-based), writes the explanation shown to users,
+  picks target plan(s), sets discount, validity window, usage cap, eligibility and stacking
+  rule, then previews, schedules, publishes, pauses or revokes it.
+- Customizable predefined templates: a library of ready offer, plan and subscription
+  templates that admins can clone and edit in their dashboard; the Super User controls who may
+  create templates and which need approval before publishing.
+- Server-side pricing only: the control plane computes the final price from the admin's plan,
+  active offers and the account currency, creates a signed price snapshot stored on the order,
+  and ignores any price sent by the browser.
+- Discount honesty: the slashed base price must be a real listed price; flag this to me for
+  Indian consumer-protection compliance.
+- Every price or offer change is audit-logged with who/what/when.
+
+## SECTION D: DESIGN & CONTENT RULES
+- No hero picture on the public site and no pane directly below it; start with clean,
+  text-led layout.
+- No real photos, no personal portraits and no AI-generated portraits. Use original drawn or
+  animated vector visuals (SVG/CSS/open-source animation), abstract and non-human.
+- Sample, demo, seed and test content uses placeholders made of letters and numbers (for
+  example Studio S1, Tool T1, Preset P1, Plan L1) instead of real person, place, thing or
+  brand names. Use them only where needed, and do not overdo. My real brand name from Phase 0
+  is used where it belongs.
+- Logo: use mine if provided, otherwise create an original vector monogram placeholder.
+  Create a complete favicon set (vector icon, standard sizes, PWA icons).
+- Icons: one permissive-license icon pack, used only where it improves clarity.
+- Every visual asset is original or permissively licensed; the license record is viewable only
+  in the admin technical area.
+
+## SECTION E: ENTITLEMENT ENFORCEMENT (PAID FEATURES ONLY AFTER CONFIRMED ACTIVE PLAN)
+- Plan states: NONE → PENDING (order created) → ACTIVE (webhook verified) → GRACE (optional) →
+  EXPIRED / CANCELLED / REFUNDED / REVOKED. Only ACTIVE (and GRACE if I approve it) unlocks
+  paid features. PENDING never unlocks anything.
+- Gated delivery: paid tools, presets and export modules are separate bundles NOT in the
+  public app. The control plane serves them only to a signed-in user whose plan is ACTIVE,
+  using short-lived signed access tokens bound to the user and session, with expiry matching
+  the plan validity.
+- Server-side checks: every paid-bundle request and every token refresh re-checks plan state.
+  Expiry, refund, cancellation or admin revoke blocks further downloads and refresh immediately.
+- Client-side checks are for UX only (locked/unlocked display), never for security.
+- Anti-sharing: limit concurrent sessions/devices per plan, bind tokens to the account, flag
+  abnormal token reuse for admin review.
+- Be honest with me: once a paid bundle is delivered to an entitled user's browser, a
+  determined user can keep that copy until the token or cache expires. Propose mitigations
+  (short token lifetimes, no long offline caching for per-day passes, re-validation at each
+  session start) and list the residual risk per plan in Phase 1.
+- Guest and freemium limits use server-issued counters or signed allowances where possible,
+  with an honest note on what can still be bypassed.
+- Admin override: eligible admins can grant, extend or revoke a plan (reason, MFA re-auth,
+  audit entry); the Super User can do everything.
+- Testing: prove that a free user, a PENDING user, an expired user and a refunded user can NOT
+  open any paid tool, even by calling the paid URLs directly.
+
+## SECTION G: GITHUB + CLOUDFLARE DEPLOYMENT
+- Repository split:
+  1. PUBLIC-APP repo: static client app (studios, free tools, public pages). No admin code,
+     no paid bundles, no secrets, no technical documentation.
+  2. CONTROL-PLANE repo (private): edge functions for identity, plans, pricing, webhooks,
+     entitlements, vault, audit, and paid-bundle delivery.
+  3. PAID-BUNDLES repo (private): paid tool/preset/export bundles, reachable only through
+     the control plane.
+  4. ADMIN-CONSOLE repo (private): admin UI, served only after category-specific login + MFA.
+  (Propose merging any of these if free-plan limits make that better, and explain why.)
+- Deployment: Cloudflare connected directly to GitHub; main branch → production, other
+  branches → preview. Give exact click-by-click Cloudflare dashboard steps.
+- Config as code: bindings and routes in version-controlled config with NO secret values.
+- The project must build and deploy successfully with ZERO secrets present (Section K).
+- CI: GitHub Actions for lint, tests, dependency audit, secret scanning, and a "no technical
+  details and no paid code in the public bundle" check; protected main branch, required
+  reviews, signed commits, 2FA on GitHub and Cloudflare.
+- Provide rollback steps, database backup/export steps and a free-limit monitoring plan.
+
+## SECTION P: PAYMENTS
+- The UI shows only "Proceed to Secure Payment". Never display the gateway name or logo
+  (Razorpay sits behind a provider-agnostic adapter; mock adapter in development).
+- Flow: user picks plan → control plane computes price (Section O) and creates the order
+  (plan = PENDING) → redirect to gateway → server-to-server webhook → verify signature → check
+  idempotency, amount, currency, order and user match → ONLY THEN set plan = ACTIVE and
+  allow entitlement tokens (Section E).
+- The redirect/success page NEVER activates anything; it shows "Payment verification in
+  progress" and polls the plan state until the webhook confirms.
+- Handle failed, pending, duplicate, delayed, refunded and disputed events; automatic expiry,
+  renewal and downgrade; invoices; everything audit-logged.
+
+## SECTION S: API / KEYS / SECRETS VAULT
+- Development uses zero real keys. Real keys (payment gateway, Google/Apple/X credentials,
+  email provider, SMS provider) can be added, rotated, revoked or removed ONLY by an eligible
+  admin (Super User or Integrations/Secrets admin) in the console, with MFA re-authentication
+  and an audit entry.
+- Stored encrypted, write-only in the UI (masked, never shown again), never logged, never sent
+  to the browser. The vault's master key comes from the deployment environment (Section K),
+  never from Git.
+
+## SECTION K: KEYS & ENVIRONMENT GUIDED SETUP (GUIDE ME THROUGHOUT)
+- TWO TIERS:
+  - Tier 1, deployment secrets (needed for the control plane itself): vault master key,
+    token-signing keys, session secret. I generate them locally using a command you give me,
+    and set them in Cloudflare (dashboard or CLI), never in Git.
+  - Tier 2, integration keys: payment gateway keys and webhook secret, Google/Apple/X
+    credentials, email and SMS provider keys. An eligible admin adds them through the vault
+    (Section S), starting in test mode.
+- DEPLOYABILITY RULES: the app builds and deploys with no secrets; missing keys put the
+  related feature into a safe "not configured" state (hidden or disabled, mock in
+  development); config files contain only binding names; a names-only `.env.example`
+  documents required variables; local secret files are git-ignored and secret-scanned.
+  Prefer Cloudflare's direct Git integration so no Cloudflare token needs to live in GitHub;
+  if a deploy token is ever needed, use a least-privilege GitHub encrypted secret.
+- GUIDE FORMAT: walk me through ONE key at a time and wait for my confirmation. For each key
+  give: purpose, where to obtain it, cost, exactly where to enter it, how to verify it works
+  (admin-only integration check in test mode), how to rotate or revoke it, and what stays
+  disabled without it. Verify current dashboard steps from official docs before instructing me.
+- SAFETY: never ask me to paste a real key in chat. I enter keys only in the Cloudflare
+  dashboard/CLI or the admin vault. If a key is ever exposed, guide me to revoke and rotate it.
+- ORDER: (1) 2FA on GitHub and Cloudflare → (2) connect repos and deploy with zero secrets →
+  (3) Tier 1 secrets → (4) bootstrap the Super User, credentials shown only in chat →
+  (5) payment test keys and webhook registration → (6) social providers → (7) email/SMS
+  providers → (8) full test run → (9) switch to live keys → (10) rollback rehearsal.
+
+## SECTION R: ROLES & HIDDEN ADMIN CONSOLE
+- No admin link, button, route hint, sitemap entry or code exists in the public bundle. Each
+  admin category has a separate, unguessable entry; unauthorized requests get a generic 404.
+  Console code is delivered only after successful category-specific login + MFA.
+- Authorization is enforced server-side on every request, never only in the UI.
+- Super User: create/edit/suspend/delete admins and users; grant/revoke/time-limit any
+  permission; define admin categories and permission sets; see all analytics, revenue,
+  security events and audit logs; manage plans, prices, offers, templates, the country-code
+  currency table, entitlements and sign-in providers; manage the vault; approve or run
+  recovery cases; force-logout sessions; emergency kill switches; export data; approve
+  sensitive actions (two-person approval for destructive ones).
+- Admins (per category): see only modules their profile permits; powers are granted, revoked or
+  time-limited by the Super User; every action is logged (who/what/when/IP/device).
+- Admin-only technical area, shown per permission and only what is needed: system status and
+  free-plan usage, error log lookup by reference ID, integration status (configured or not,
+  never key values), audit trail, and asset license records. Architecture notes and
+  dependency lists are visible to the Super User and to admins the Super User grants this to.
+  Technical views are never rendered in, or fetched by, user-facing screens.
+- Everyone gets Profile, Settings, Preferences and Analytics appropriate to their role; users
+  also get Upgrade (Section U).
+
+## SECTION Q: SECURITY BASELINE
+Input validation, output encoding, CSRF protection, strict CSP, Subresource Integrity,
+dependency pinning and scanning, sandboxed Web Workers, parameterized queries, least
+privilege, encrypted backups, PII-redacted logs, OWASP ASVS Level 2 as the target.
+
+---
+
+## SECTION F: FLOWCHARTS (MERMAID, AI-READABLE)
+
+### Chart 1: Phase flow
+```mermaid
+flowchart TD
+  S([Start]) --> P0["Phase 0 Discovery Q and A"]
+  P0 --> P1["Phase 1 Blueprint, no code"]
+  P1 --> G1{"APPROVED?"}
+  G1 -- no --> P0
+  G1 -- yes --> P2["Phase 2 Foundation"]
+  P2 --> P3["Phase 3 Public site and user area"]
+  P3 --> P4["Phase 4 Studios, tools, presets"]
+  P4 --> P5["Phase 5 Pricing, offers, payments"]
+  P5 --> P6["Phase 6 Admin system"]
+  P6 --> P7["Phase 7 Hardening and testing"]
+  P7 --> P8["Phase 8 Guided keys setup and go-live"]
+  P8 --> E([Live])
+  P2 -. "each phase: build, test, Decision Log, wait for APPROVED" .-> P3
+```
+
+### Chart 2: Unified sign-in / sign-up
+```mermaid
+flowchart TD
+  A["Single button: Sign in / Sign up, default sign in"] --> B{"Method"}
+  B -- "Passkey" --> C["Passkey check"]
+  B -- "Google, Apple or X" --> D["OAuth with PKCE through control plane"]
+  B -- "Email or phone with country code" --> E["Send one-time code, neutral message"]
+  E --> F["Verify code"]
+  C --> G{"Account exists?"}
+  D --> G
+  F --> G
+  G -- yes --> H["MFA if required"]
+  H --> I["Create session and refresh entitlement"]
+  I --> J["User dashboard"]
+  G -- no --> K["Complete sign-up: country code and terms"]
+  K --> L["Map country code to currency, show once with explanation, lock"]
+  L --> M["Create account"]
+  M --> J
+```
+
+### Chart 3: Pricing, payment and activation
+```mermaid
+flowchart TD
+  A["User picks plan"] --> B["Server computes price from admin plan and offer in account currency"]
+  B --> C["Create order, plan state PENDING, signed price snapshot"]
+  C --> D["Proceed to Secure Payment, redirect to gateway"]
+  D --> E["Return page: verification in progress, poll plan state"]
+  D --> F["Gateway sends webhook to control plane"]
+  F --> G{"Signature valid, not replayed, amount, currency, order and user match?"}
+  G -- no --> H["Reject, audit log, plan stays PENDING"]
+  G -- yes --> I["Set plan ACTIVE, audit log"]
+  I --> J["Issue short-lived signed entitlement token"]
+  J --> K["Paid bundles unlocked"]
+  E -. "poll sees ACTIVE" .-> K
+```
+
+### Chart 4: Paid bundle access and expiry
+```mermaid
+flowchart TD
+  A["Request for paid bundle"] --> B{"Signed token valid and bound to this user and session?"}
+  B -- no --> X["Deny"]
+  B -- yes --> C{"Plan state ACTIVE or approved GRACE?"}
+  C -- no --> X
+  C -- yes --> D["Deliver bundle"]
+  D --> E["Token expires with plan validity or short lifetime"]
+  E --> A
+  F["Expiry, refund, cancel or admin revoke"] --> X
+```
+
+### Chart 5: Admin console access
+```mermaid
+flowchart TD
+  A["Public site: no admin link or code"] --> B["Admin opens category-specific unguessable entry"]
+  B --> C{"Passkey and MFA valid?"}
+  C -- no --> D["Generic 404 or failure, rate limit, audit"]
+  C -- yes --> E["Server delivers console code for that category only"]
+  E --> F["Modules shown per permission set"]
+  F --> G["Every action audit-logged"]
+  G --> H{"Sensitive action?"}
+  H -- yes --> I["Re-authenticate and require second approval"]
+  H -- no --> J["Execute"]
+  I --> J
+```
+
+### Chart 6: Admin offer lifecycle
+```mermaid
+flowchart TD
+  A["Admin opens Offers and Pricing"] --> B["Pick predefined template or start blank"]
+  B --> C["Set nature, explanation, target plans, discount, per-currency prices, validity, cap, stacking"]
+  C --> D["Preview with slashed base price and offer button"]
+  D --> E{"Approval required?"}
+  E -- yes --> F["Super User approves"]
+  E -- no --> G["Schedule or publish"]
+  F --> G
+  G --> H["Server uses offer in price computation"]
+  H --> I["Expire, pause or revoke"]
+  I --> J["Audit log"]
+```
+
+### Chart 7: Account deletion
+```mermaid
+flowchart TD
+  A["User chooses Delete account"] --> B["Re-authenticate and confirm"]
+  B --> C["Erase credentials, linked IDs, email and phone, recovery codes, sessions, tokens, preferences, personal data"]
+  C --> D["Revoke entitlement tokens"]
+  D --> E["Keep only anonymized legal payment records"]
+  E --> F["Confirm and wipe local data on device"]
+```
+
+### Chart 8: Keys setup procedure
+```mermaid
+flowchart TD
+  A["2FA on GitHub and Cloudflare"] --> B["Connect repos and deploy with zero secrets"]
+  B --> C["Tier 1 secrets set in Cloudflare"]
+  C --> D["Bootstrap Super User, credentials shown only in chat"]
+  D --> E["Admin adds payment test keys in vault and registers webhook"]
+  E --> F["Admin adds social, email and SMS provider keys"]
+  F --> G["Admin-only integration check in test mode"]
+  G --> H{"All checks pass?"}
+  H -- no --> I["Fix, rotate or revoke key, repeat"]
+  I --> G
+  H -- yes --> J["Switch to live keys"]
+  J --> K["Rollback rehearsal"]
+```
+
+---
+
+## OUTPUT FORMAT FOR EVERY PHASE
+1. Summary of what is being built
+2. Decisions needed from me (numbered, with recommended defaults)
+3. Deliverables (files, code, diagrams)
+4. Test checklist
+5. "Reply APPROVED to continue to the next phase."
+
+## START NOW
+Begin Phase 0. Ask the questions for categories A and B first.
