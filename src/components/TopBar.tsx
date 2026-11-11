@@ -17,6 +17,9 @@ interface TopBarProps {
   onNavigate: (route: ActiveRoute) => void;
   isSignedIn: boolean;
   userHandle?: string;
+  userRoleCategory?: string;
+  activePlanName?: string;
+  hasAdminAccess?: boolean;
   locale: SupportedLocale;
 }
 
@@ -25,6 +28,9 @@ export const TopBar: React.FC<TopBarProps> = ({
   onNavigate,
   isSignedIn,
   userHandle,
+  userRoleCategory,
+  activePlanName,
+  hasAdminAccess,
   locale,
 }) => {
   const t = UI_DICTIONARY[locale] || UI_DICTIONARY.en;
@@ -33,11 +39,25 @@ export const TopBar: React.FC<TopBarProps> = ({
     <>
       {/* Strict 3-Zone Top Bar Contract (frontend-design §2) */}
       <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-4 sm:px-8 h-14 bg-[#FAF8F5]/95 dark:bg-[#121110]/95 backdrop-blur-md border-b border-[#E7E2DA] dark:border-[#2E2B28]">
-        {/* Zone 1: Single text element wordmark with original VS vector monogram */}
+        {/* Zone 1: Brand Title & Monogram Logo = Home / Dashboard Button */}
         <button
           type="button"
-          onClick={() => onNavigate('STUDIOS')}
-          className="flex items-center gap-2.5 text-left text-base sm:text-lg font-bold tracking-tight text-[#181615] dark:text-[#F5F2EB] whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-[#B44C32]"
+          data-testid="brand-home-dashboard-btn"
+          title={
+            isSignedIn
+              ? activeRoute === 'STUDIOS'
+                ? 'Open User Dashboard (or click again from Dashboard to return Home)'
+                : 'Return to Home Studio Workspace'
+              : 'Return to Varnank Studios Home Workspace'
+          }
+          onClick={() => {
+            if (isSignedIn && activeRoute === 'STUDIOS') {
+              onNavigate('DASHBOARD');
+            } else {
+              onNavigate('STUDIOS');
+            }
+          }}
+          className="flex items-center gap-2.5 text-left text-base sm:text-lg font-bold tracking-tight text-[#181615] dark:text-[#F5F2EB] whitespace-nowrap shrink-0 hover:opacity-85 transition-opacity focus-visible:outline-2 focus-visible:outline-[#B44C32]"
         >
           <svg
             aria-hidden="true"
@@ -64,7 +84,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           <span>Varnank Studios</span>
         </button>
 
-        {/* Zone 2: 4 concise single-line navigation links */}
+        {/* Zone 2: Concise single-line navigation links */}
         <nav
           aria-label="Primary Navigation"
           className="hidden md:flex items-center gap-7 text-sm font-medium text-[#57534E] dark:text-[#A8A29E]"
@@ -79,17 +99,6 @@ export const TopBar: React.FC<TopBarProps> = ({
             }`}
           >
             {t.navStudios}
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('PRESETS')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
-              activeRoute === 'PRESETS'
-                ? 'text-[#181615] dark:text-[#F5F2EB] border-[#B44C32]'
-                : 'border-transparent hover:text-[#181615] dark:hover:text-[#F5F2EB]'
-            }`}
-          >
-            {t.navPresets}
           </button>
           <button
             type="button"
@@ -115,19 +124,32 @@ export const TopBar: React.FC<TopBarProps> = ({
           </button>
         </nav>
 
-        {/* Zone 3: Single primary action button (Sign in / Sign up OR Dashboard) */}
-        <div className="flex items-center shrink-0">
+        {/* Zone 3: Single primary action area (Sign in / Sign up OR Dashboard + Admin Console) */}
+        <div className="flex items-center gap-2 shrink-0">
+          {hasAdminAccess && (
+            <button
+              type="button"
+              data-testid="topbar-admin-console-btn"
+              onClick={() => onNavigate('HIDDEN_ADMIN')}
+              className="hidden sm:inline-flex items-center min-h-[38px] px-3 py-1.5 text-xs font-mono font-semibold text-[#B44C32] bg-[#FAF8F5] dark:bg-[#1C1A18] border border-[#B44C32] rounded-lg hover:bg-[#B44C32] hover:text-white transition-colors"
+            >
+              {userRoleCategory || 'ADMIN'} Console
+            </button>
+          )}
           {isSignedIn ? (
             <button
               type="button"
+              data-testid="topbar-dashboard-btn"
               onClick={() => onNavigate('DASHBOARD')}
               className="min-h-[40px] px-4 py-2 text-xs sm:text-sm font-medium text-[#FAF8F5] bg-[#181615] dark:bg-[#E06D53] dark:text-[#121110] rounded-lg hover:opacity-90 transition-opacity whitespace-nowrap shrink-0"
             >
               {t.dashboard} · {userHandle || 'Account'}
+              {activePlanName ? ` (${activePlanName})` : ''}
             </button>
           ) : (
             <button
               type="button"
+              data-testid="topbar-auth-btn"
               onClick={() => onNavigate('AUTH')}
               className="min-h-[40px] px-4 py-2 text-xs sm:text-sm font-medium text-[#FAF8F5] bg-[#B44C32] hover:bg-[#9E3F27] rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
@@ -155,17 +177,6 @@ export const TopBar: React.FC<TopBarProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => onNavigate('PRESETS')}
-          className={`min-h-[44px] flex flex-col items-center justify-center text-xs font-medium whitespace-nowrap ${
-            activeRoute === 'PRESETS'
-              ? 'text-[#B44C32] dark:text-[#E06D53]'
-              : 'text-[#57534E] dark:text-[#A8A29E]'
-          }`}
-        >
-          <span>{t.navPresets}</span>
-        </button>
-        <button
-          type="button"
           onClick={() => onNavigate('PLANS')}
           className={`min-h-[44px] flex flex-col items-center justify-center text-xs font-medium whitespace-nowrap ${
             activeRoute === 'PLANS'
@@ -174,6 +185,17 @@ export const TopBar: React.FC<TopBarProps> = ({
           }`}
         >
           <span>{t.navPlans}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onNavigate('HELP')}
+          className={`min-h-[44px] flex flex-col items-center justify-center text-xs font-medium whitespace-nowrap ${
+            activeRoute === 'HELP'
+              ? 'text-[#B44C32] dark:text-[#E06D53]'
+              : 'text-[#57534E] dark:text-[#A8A29E]'
+          }`}
+        >
+          <span>{t.navHelp}</span>
         </button>
         <button
           type="button"

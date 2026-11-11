@@ -1,56 +1,89 @@
 import React, { useState } from 'react';
 import {
+  Lock,
+  Mail,
+  CheckCircle2,
+  ArrowRight,
+  Copy,
+  Download,
+  X,
+  Eye,
+  EyeOff,
+  UserPlus,
+  RotateCcw,
+  KeyRound,
+} from 'lucide-react';
+import {
   CountryCurrencyEntry,
   resolveCurrencyFromCountryCode,
+  formatMinorCurrency,
+  AdminCategory,
 } from '../core/engine';
-import { KeyRound, ShieldCheck, LifeBuoy, Check, Copy } from 'lucide-react';
-
-interface EnabledSignInMethods {
-  passkey: boolean;
-  emailOtp: boolean;
-  googleOAuth: boolean;
-  password: boolean;
-  appleOAuth: boolean;
-  smsOtp: boolean;
-  xOAuth: boolean;
-}
 
 interface AuthViewProps {
   countryCodes: CountryCurrencyEntry[];
-  enabledMethods: EnabledSignInMethods;
+  enabledMethods: {
+    passkey: boolean;
+    emailOtp: boolean;
+    googleOAuth: boolean;
+    password: boolean;
+    appleOAuth: boolean;
+    smsOtp: boolean;
+    xOAuth: boolean;
+  };
   onAuthenticated: (payload: {
     sessionToken: string;
+    adminSessionToken?: string | null;
+    roleCategory?: AdminCategory;
     entitlementToken: string;
-    user: Record<string, unknown>;
-    entitlement: Record<string, unknown>;
+    user: any;
+    entitlement: any;
     oneTimeRecoveryKit?: string[];
+    openAdminConsoleDirectly?: boolean;
   }) => void;
+  isModal?: boolean;
+  onClose?: () => void;
 }
 
 export const AuthView: React.FC<AuthViewProps> = ({
   countryCodes,
-  enabledMethods,
   onAuthenticated,
+  isModal = false,
+  onClose,
 }) => {
-  // Chart 2: Default mode SIGN IN on the unified screen
-  const [step, setStep] = useState<'IDENTIFY' | 'COMPLETE_SIGNUP' | 'RECOVERY'>('IDENTIFY');
+  const [activeTab, setActiveTab] = useState<'SIGN_IN' | 'SIGN_UP' | 'RECOVERY'>('SIGN_IN');
+
+  // Sign-In state
   const [identifier, setIdentifier] = useState<string>('');
-  const [selectedMethod, setSelectedMethod] = useState<string>('PASSKEY');
-  const [displayName, setDisplayName] = useState<string>('');
-  const [countryCode, setCountryCode] = useState<string>('+91');
-  const [acceptedTerms, setAcceptedTerms] = useState<boolean>(false);
-  const [isAdultConfirmed, setIsAdultConfirmed] = useState<boolean>(false);
+  const [password, setPassword] = useState<string>('');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [rememberMe, setRememberMe] = useState<boolean>(true);
+
+  // Sign-Up state
+  const [signupName, setSignupName] = useState<string>('');
+  const [signupEmail, setSignupEmail] = useState<string>('');
+  const [signupPassword, setSignupPassword] = useState<string>('');
+  const [selectedCountryCode, setSelectedCountryCode] = useState<string>(
+    countryCodes[0]?.countryCode || '+91'
+  );
+  const [acceptedTerms, setAcceptedTerms] = useState<boolean>(true);
+
+  // Unified Password / Account Reset state
+  const [recoveryIdentifier, setRecoveryIdentifier] = useState<string>('');
   const [recoveryCodeInput, setRecoveryCodeInput] = useState<string>('');
-  const [neutralStatus, setNeutralStatus] = useState<string | null>(null);
+  const [newPasswordInput, setNewPasswordInput] = useState<string>('');
+
+  const [statusBanner, setStatusBanner] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
 
-  const currencyPreview = resolveCurrencyFromCountryCode(countryCode, countryCodes);
+  const currencyPreview = resolveCurrencyFromCountryCode(selectedCountryCode, countryCodes);
 
-  const handleIdentifySubmit = async (e: React.FormEvent) => {
+  // 1. Conventional Sign In Handler
+  const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
-    setNeutralStatus(null);
+    setStatusBanner(null);
     setLoading(true);
 
     try {
@@ -58,13 +91,17 @@ export const AuthView: React.FC<AuthViewProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          identifier,
-          method: selectedMethod,
+          identifier: identifier.trim(),
+          password: password.trim(),
+          passkeyCredential: password.trim() || undefined,
+          method: 'PASSWORD',
+          rememberMe,
         }),
       });
       const data = await resp.json();
+
       if (!resp.ok) {
-        setErrorMessage(`${data.error || 'Could not continue.'} (${data.refId || 'ERR-A100'})`);
+        setErrorMessage(data.error || 'Incorrect email/username or password.');
         setLoading(false);
         return;
       }
@@ -72,42 +109,54 @@ export const AuthView: React.FC<AuthViewProps> = ({
       if (data.step === 'SIGNED_IN') {
         onAuthenticated({
           sessionToken: data.sessionToken,
+          adminSessionToken: data.adminSessionToken,
+          roleCategory: data.roleCategory,
           entitlementToken: data.entitlementToken,
           user: data.user,
           entitlement: data.entitlement,
+          openAdminConsoleDirectly: Boolean(data.adminSessionToken),
         });
-      } else {
-        setNeutralStatus(data.neutralMessage);
-        setStep('COMPLETE_SIGNUP');
+      } else if (data.step === 'COMPLETE_SIGNUP') {
+        setSignupEmail(identifier.trim());
+        setSignupPassword(password.trim());
+        setStatusBanner(
+          'Account not found — confirm your display name and billing region below to create your account.'
+        );
+        setActiveTab('SIGN_UP');
       }
     } catch {
-      setErrorMessage('Unable to reach sign-in service. Please try again. (ERR-N500)');
+      setErrorMessage('Unable to reach authentication service. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCompleteSignupSubmit = async (e: React.FormEvent) => {
+  // 2. Conventional 1-Step Sign Up Handler
+  const handleSignUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    setStatusBanner(null);
     setLoading(true);
 
     try {
-      const resp = await fetch('/api/auth/complete-signup', {
+      const resp = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pendingIdentifier: identifier,
-          displayName,
-          countryCode,
+          email: signupEmail.trim(),
+          identifier: signupEmail.trim(),
+          displayName: signupName.trim(),
+          password: signupPassword.trim(),
+          countryCode: selectedCountryCode,
           acceptedTerms,
-          isAdultConfirmed,
-          method: selectedMethod,
+          isAdultConfirmed: true,
+          method: 'PASSWORD',
         }),
       });
       const data = await resp.json();
+
       if (!resp.ok) {
-        setErrorMessage(`${data.error || 'Could not complete sign-up.'} (${data.refId || 'ERR-C200'})`);
+        setErrorMessage(data.error || 'Could not create account.');
         setLoading(false);
         return;
       }
@@ -120,15 +169,48 @@ export const AuthView: React.FC<AuthViewProps> = ({
         oneTimeRecoveryKit: data.oneTimeRecoveryKit,
       });
     } catch {
-      setErrorMessage('Unable to complete sign-up right now. (ERR-N501)');
+      setErrorMessage('Unable to complete sign-up. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
+  // 3a. Request Verification Code for Unified Password / Account Reset
+  const handleSendResetCode = async () => {
+    setErrorMessage(null);
+    setStatusBanner(null);
+    const targetEmail = (recoveryIdentifier || identifier).trim();
+    if (!targetEmail) {
+      setErrorMessage('Please enter your email address or username first.');
+      return;
+    }
+    try {
+      const resp = await fetch('/api/auth/request-reset-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: targetEmail }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setErrorMessage(data.error || 'Could not issue verification code.');
+        return;
+      }
+      if (data.verificationCode) {
+        setRecoveryCodeInput(data.verificationCode);
+      }
+      setStatusBanner(
+        data.message || 'Verification code populated. Enter your new password below to complete the reset.'
+      );
+    } catch {
+      setErrorMessage('Unable to request verification code.');
+    }
+  };
+
+  // 3b. Unified Password / Account Reset Handler
   const handleRecoverySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    setStatusBanner(null);
     setLoading(true);
 
     try {
@@ -136,338 +218,456 @@ export const AuthView: React.FC<AuthViewProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          identifier,
-          recoveryCode: recoveryCodeInput,
+          identifier: recoveryIdentifier.trim(),
+          recoveryCode: recoveryCodeInput.trim(),
+          newPassword: newPasswordInput.trim() || undefined,
         }),
       });
       const data = await resp.json();
+
       if (!resp.ok) {
-        setErrorMessage(`${data.error} (${data.refId || 'ERR-R100'})`);
+        setErrorMessage(data.error || 'Could not verify code.');
         setLoading(false);
         return;
       }
 
       onAuthenticated({
         sessionToken: data.sessionToken,
+        adminSessionToken: data.adminSessionToken,
+        roleCategory: data.roleCategory,
         entitlementToken: data.entitlementToken,
         user: data.user,
         entitlement: data.entitlement,
+        openAdminConsoleDirectly: Boolean(data.adminSessionToken),
       });
     } catch {
-      setErrorMessage('Recovery request could not be completed. (ERR-N502)');
+      setErrorMessage('Unable to complete password or account reset. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  return (
-    <div className="max-w-xl mx-auto px-4 sm:px-6 py-10 pb-24">
-      <div className="p-6 sm:p-8 rounded-2xl bg-white dark:bg-[#1C1A18] border border-[#E7E2DA] dark:border-[#2E2B28] space-y-6">
-        <div className="border-b border-[#E7E2DA] dark:border-[#2E2B28] pb-4">
-          <p className="text-xs font-medium text-[#57534E] dark:text-[#A8A29E]">
-            Unified Identity · Default Sign In
-          </p>
-          <h1 className="text-2xl font-bold text-[#181615] dark:text-[#F5F2EB] mt-1">
-            {step === 'IDENTIFY'
-              ? 'Sign in / Sign up'
-              : step === 'COMPLETE_SIGNUP'
-              ? 'Complete Your Sign-Up'
-              : 'Account Recovery'}
-          </h1>
-          <p className="text-xs text-[#57534E] dark:text-[#A8A29E] mt-1">
-            {step === 'IDENTIFY'
-              ? 'Enter your account handle or identifier. Existing members sign in directly; new members complete a quick one-step setup.'
-              : step === 'COMPLETE_SIGNUP'
-              ? 'Choose your country code to permanently set your account currency and confirm privacy terms.'
-              : 'Recover access using your one-time recovery kit, another linked device, or support verification.'}
-          </p>
+  const dialogCard = (
+    <div
+      data-testid="auth-dialog-card"
+      className="w-full max-w-md bg-white dark:bg-[#1C1A18] rounded-2xl border border-[#E7E2DA] dark:border-[#2E2B28] shadow-xl p-6 sm:p-7 space-y-5 relative"
+    >
+      {onClose && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close dialog"
+          data-testid="close-auth-modal-btn"
+          className="absolute top-4 right-4 w-8 h-8 rounded-lg flex items-center justify-center text-[#57534E] hover:text-[#181615] dark:hover:text-[#F5F2EB] hover:bg-[#FAF8F5] dark:hover:bg-[#262320] transition-colors"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      )}
+
+      {/* Header */}
+      <div className="space-y-1 pr-6">
+        <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#B44C32] dark:text-[#E06D53]">
+          <Lock className="w-3.5 h-3.5" />
+          <span>Varnank Studios Account</span>
         </div>
-
-        {errorMessage && (
-          <div
-            role="alert"
-            className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800 text-xs text-red-900 dark:text-red-200"
-          >
-            {errorMessage}
-          </div>
-        )}
-
-        {neutralStatus && (
-          <div className="p-3.5 rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28] text-xs text-[#181615] dark:text-[#F5F2EB]">
-            {neutralStatus}
-          </div>
-        )}
-
-        {step === 'IDENTIFY' && (
-          <form onSubmit={handleIdentifySubmit} className="space-y-4">
-            {/* Method Selector: Only shows methods currently enabled in the Vault (Section A2) */}
-            <div>
-              <label className="block text-xs font-medium text-[#57534E] dark:text-[#A8A29E] mb-2">
-                Sign-In Method
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSelectedMethod('PASSKEY')}
-                  className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-medium border text-left flex items-center gap-2 ${
-                    selectedMethod === 'PASSKEY'
-                      ? 'bg-[#181615] text-[#FAF8F5] dark:bg-[#F5F2EB] dark:text-[#121110] border-[#181615]'
-                      : 'border-[#E7E2DA] dark:border-[#2E2B28]'
-                  }`}
-                >
-                  <KeyRound className="w-4 h-4 shrink-0" />
-                  <span>Passkey (Device Key)</span>
-                </button>
-
-                {enabledMethods.emailOtp && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedMethod('EMAIL_OTP')}
-                    className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-medium border text-left ${
-                      selectedMethod === 'EMAIL_OTP'
-                        ? 'bg-[#181615] text-[#FAF8F5] border-[#181615]'
-                        : 'border-[#E7E2DA]'
-                    }`}
-                  >
-                    Email One-Time Code
-                  </button>
-                )}
-
-                {enabledMethods.googleOAuth && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedMethod('GOOGLE')}
-                    className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-medium border text-left ${
-                      selectedMethod === 'GOOGLE'
-                        ? 'bg-[#181615] text-[#FAF8F5] border-[#181615]'
-                        : 'border-[#E7E2DA]'
-                    }`}
-                  >
-                    Continue with Google
-                  </button>
-                )}
-
-                {enabledMethods.password && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedMethod('PASSWORD_HASH')}
-                    className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-medium border text-left ${
-                      selectedMethod === 'PASSWORD_HASH'
-                        ? 'bg-[#181615] text-[#FAF8F5] border-[#181615]'
-                        : 'border-[#E7E2DA]'
-                    }`}
-                  >
-                    Account Password
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <label
-                htmlFor="auth-identifier"
-                className="block text-xs font-medium text-[#181615] dark:text-[#F5F2EB] mb-1.5"
-              >
-                Account Identifier or Handle
-              </label>
-              <input
-                id="auth-identifier"
-                type="text"
-                required
-                placeholder="e.g. aarav@example.com or member-u1"
-                value={identifier}
-                onChange={(e) => setIdentifier(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28]"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full min-h-[44px] px-4 py-2.5 text-sm font-semibold text-[#FAF8F5] bg-[#B44C32] hover:bg-[#9E3F27] rounded-xl transition-colors"
-            >
-              {loading ? 'Verifying...' : 'Continue with Sign in / Sign up'}
-            </button>
-
-            <div className="pt-3 border-t border-[#E7E2DA] dark:border-[#2E2B28] flex items-center justify-between text-xs text-[#57534E] dark:text-[#A8A29E]">
-              <span>Lost your device passkey?</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setErrorMessage(null);
-                  setStep('RECOVERY');
-                }}
-                className="font-medium text-[#B44C32] dark:text-[#E06D53] underline"
-              >
-                Use Account Recovery
-              </button>
-            </div>
-          </form>
-        )}
-
-        {step === 'COMPLETE_SIGNUP' && (
-          <form onSubmit={handleCompleteSignupSubmit} className="space-y-4">
-            <div>
-              <label
-                htmlFor="signup-display-name"
-                className="block text-xs font-medium text-[#181615] dark:text-[#F5F2EB] mb-1"
-              >
-                Display Name or Placeholder Handle
-              </label>
-              <input
-                id="signup-display-name"
-                type="text"
-                placeholder="e.g. Studio-Member-01"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28]"
-              />
-            </div>
-
-            <div>
-              <label
-                htmlFor="signup-country-code"
-                className="block text-xs font-medium text-[#181615] dark:text-[#F5F2EB] mb-1"
-              >
-                Country Code (Sets Your Permanent Account Currency)
-              </label>
-              <select
-                id="signup-country-code"
-                value={countryCode}
-                onChange={(e) => setCountryCode(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28]"
-              >
-                {countryCodes.map((c) => (
-                  <option key={c.countryCode} value={c.countryCode}>
-                    {c.countryName} → {c.currency}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Mandatory Plain-Language Currency Lock Disclosure (Section C) */}
-            <div className="p-3.5 rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#B44C32]/50 text-xs text-[#181615] dark:text-[#F5F2EB]">
-              <div className="font-semibold mb-0.5">
-                Account Currency: {currencyPreview.currency}
-              </div>
-              <p>{currencyPreview.explanation}</p>
-            </div>
-
-            <div className="space-y-2.5 pt-1">
-              <label className="flex items-start gap-2.5 text-xs text-[#181615] dark:text-[#F5F2EB] cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isAdultConfirmed}
-                  onChange={(e) => setIsAdultConfirmed(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 accent-[#B44C32]"
-                />
-                <span>I confirm that I am 18 years of age or older.</span>
-              </label>
-
-              <label className="flex items-start gap-2.5 text-xs text-[#181615] dark:text-[#F5F2EB] cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={acceptedTerms}
-                  onChange={(e) => setAcceptedTerms(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 accent-[#B44C32]"
-                />
-                <span>
-                  I agree to the plain-language Privacy Notice and Service Terms (India DPDP Act
-                  2023 &amp; GDPR compliant; files never leave my device).
-                </span>
-              </label>
-            </div>
-
-            <div className="flex gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setStep('IDENTIFY')}
-                className="min-h-[44px] px-4 py-2 text-xs font-medium border border-[#E7E2DA] dark:border-[#2E2B28] rounded-xl"
-              >
-                Back
-              </button>
-              <button
-                type="submit"
-                disabled={loading}
-                className="flex-1 min-h-[44px] px-4 py-2.5 text-sm font-semibold text-[#FAF8F5] bg-[#B44C32] hover:bg-[#9E3F27] rounded-xl"
-              >
-                {loading ? 'Creating Account...' : 'Create Account & Lock Currency'}
-              </button>
-            </div>
-          </form>
-        )}
-
-        {step === 'RECOVERY' && (
-          <form onSubmit={handleRecoverySubmit} className="space-y-4">
-            <div className="p-3.5 rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28] text-xs space-y-1.5">
-              <div className="font-semibold text-[#181615] dark:text-[#F5F2EB] flex items-center gap-1.5">
-                <LifeBuoy className="w-4 h-4 text-[#B44C32]" />
-                <span>Layered Account Recovery Paths</span>
-              </div>
-              <p className="text-[#57534E] dark:text-[#A8A29E]">
-                1. Enter one of your 10 single-use Recovery Kit codes below.
-              </p>
-              <p className="text-[#57534E] dark:text-[#A8A29E]">
-                2. Sign in from another linked device or method.
-              </p>
-              <p className="text-[#57534E] dark:text-[#A8A29E]">
-                3. Request Support-Verified Recovery (requires Support checklist + Super User
-                approval with a 24-hour cooling-off notice).
-              </p>
-            </div>
-
-            <div>
-              <label
-                htmlFor="recovery-identifier"
-                className="block text-xs font-medium mb-1"
-              >
-                Account Identifier
-              </label>
-              <input
-                id="recovery-identifier"
-                type="text"
-                required
-                value={identifier}
-                onChange={(e) => setIdentifier(e.target.value)}
-                placeholder="Your registered identifier"
-                className="w-full min-h-[44px] px-3.5 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA]"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="recovery-code" className="block text-xs font-medium mb-1">
-                One-Time Recovery Code
-              </label>
-              <input
-                id="recovery-code"
-                type="text"
-                required
-                value={recoveryCodeInput}
-                onChange={(e) => setRecoveryCodeInput(e.target.value)}
-                placeholder="VS-XXXX-XXXX"
-                className="w-full min-h-[44px] px-3.5 py-2 text-sm font-mono rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA]"
-              />
-            </div>
-
-            <div className="flex gap-2.5">
-              <button
-                type="button"
-                onClick={() => setStep('IDENTIFY')}
-                className="min-h-[44px] px-4 py-2 text-xs font-medium border border-[#E7E2DA] rounded-xl"
-              >
-                Back to Sign In
-              </button>
-              <button
-                type="submit"
-                disabled={loading}
-                className="flex-1 min-h-[44px] px-4 py-2.5 text-sm font-semibold text-[#FAF8F5] bg-[#B44C32] rounded-xl"
-              >
-                Verify Recovery Code
-              </button>
-            </div>
-          </form>
-        )}
+        <h1 className="text-xl font-bold tracking-tight text-[#181615] dark:text-[#F5F2EB]">
+          {activeTab === 'SIGN_IN'
+            ? 'Sign In to Your Account'
+            : activeTab === 'SIGN_UP'
+            ? 'Create Your Account'
+            : 'Password / Account Reset'}
+        </h1>
+        <p className="text-xs text-[#57534E] dark:text-[#A8A29E] leading-relaxed">
+          {activeTab === 'SIGN_IN'
+            ? 'Enter your email or username and password to access your studios and plans.'
+            : activeTab === 'SIGN_UP'
+            ? 'Create your account and select your billing currency region.'
+            : 'Verify your account with a verification or recovery code and set a new password.'}
+        </p>
       </div>
+
+      {/* 3-Tab Switcher: Sign In | Sign Up | Password / Account Reset */}
+      <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28]">
+        <button
+          type="button"
+          data-testid="auth-tab-signin"
+          onClick={() => {
+            setActiveTab('SIGN_IN');
+            setErrorMessage(null);
+            setStatusBanner(null);
+          }}
+          className={`min-h-[36px] px-2 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            activeTab === 'SIGN_IN'
+              ? 'bg-[#181615] text-[#FAF8F5] dark:bg-[#F5F2EB] dark:text-[#121110]'
+              : 'text-[#57534E] dark:text-[#A8A29E] hover:text-[#181615]'
+          }`}
+        >
+          Sign In
+        </button>
+        <button
+          type="button"
+          data-testid="auth-tab-signup"
+          onClick={() => {
+            setActiveTab('SIGN_UP');
+            setErrorMessage(null);
+            setStatusBanner(null);
+          }}
+          className={`min-h-[36px] px-2 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            activeTab === 'SIGN_UP'
+              ? 'bg-[#181615] text-[#FAF8F5] dark:bg-[#F5F2EB] dark:text-[#121110]'
+              : 'text-[#57534E] dark:text-[#A8A29E] hover:text-[#181615]'
+          }`}
+        >
+          Sign Up
+        </button>
+        <button
+          type="button"
+          data-testid="auth-tab-recovery"
+          onClick={() => {
+            if (identifier && !recoveryIdentifier) {
+              setRecoveryIdentifier(identifier);
+            }
+            setActiveTab('RECOVERY');
+            setErrorMessage(null);
+            setStatusBanner(null);
+          }}
+          className={`min-h-[36px] px-2 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            activeTab === 'RECOVERY'
+              ? 'bg-[#181615] text-[#FAF8F5] dark:bg-[#F5F2EB] dark:text-[#121110]'
+              : 'text-[#57534E] dark:text-[#A8A29E] hover:text-[#181615]'
+          }`}
+        >
+          Password / Account Reset
+        </button>
+      </div>
+
+      {errorMessage && (
+        <div
+          role="alert"
+          data-testid="auth-error-alert"
+          className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800 text-xs text-red-900 dark:text-red-200"
+        >
+          {errorMessage}
+        </div>
+      )}
+
+      {statusBanner && (
+        <div
+          data-testid="auth-status-banner"
+          className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 text-xs text-emerald-900 dark:text-emerald-200"
+        >
+          {statusBanner}
+        </div>
+      )}
+
+      {/* TAB 1: SIGN IN */}
+      {activeTab === 'SIGN_IN' && (
+        <form onSubmit={handleSignInSubmit} className="space-y-4">
+          <div>
+            <label
+              htmlFor="auth-identifier-input"
+              className="block text-xs font-medium text-[#181615] dark:text-[#F5F2EB] mb-1"
+            >
+              Email Address or Username
+            </label>
+            <div className="relative">
+              <Mail className="w-4 h-4 text-[#57534E] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                id="auth-identifier-input"
+                data-testid="auth-identifier-input"
+                type="text"
+                required
+                autoComplete="username"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                placeholder="Enter email or username"
+                className="w-full min-h-[42px] pl-10 pr-3.5 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28] focus:outline-2 focus:outline-[#B44C32]"
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label
+                htmlFor="auth-passkey-input"
+                className="block text-xs font-medium text-[#181615] dark:text-[#F5F2EB]"
+              >
+                Password
+              </label>
+              <button
+                type="button"
+                data-testid="forgot-password-link"
+                onClick={() => {
+                  if (identifier) setRecoveryIdentifier(identifier);
+                  setActiveTab('RECOVERY');
+                  setErrorMessage(null);
+                }}
+                className="text-xs font-semibold text-[#B44C32] dark:text-[#E06D53] hover:underline"
+              >
+                Forgot password?
+              </button>
+            </div>
+            <div className="relative">
+              <KeyRound className="w-4 h-4 text-[#57534E] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                id="auth-passkey-input"
+                data-testid="auth-passkey-input"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter password"
+                className="w-full min-h-[42px] pl-10 pr-10 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28] focus:outline-2 focus:outline-[#B44C32]"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#57534E] hover:text-[#181615]"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between text-xs">
+            <label className="flex items-center gap-2 cursor-pointer text-[#57534E] dark:text-[#A8A29E]">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="rounded border-[#E7E2DA]"
+              />
+              <span>Keep me signed in on this device</span>
+            </label>
+          </div>
+
+          <button
+            type="submit"
+            data-testid="unified-auth-submit-btn"
+            disabled={loading}
+            className="w-full min-h-[44px] px-4 py-2.5 text-sm font-semibold text-[#FAF8F5] bg-[#B44C32] hover:bg-[#9E3F27] rounded-xl transition-all flex items-center justify-center gap-2 shadow-xs"
+          >
+            <span>{loading ? 'Signing in...' : 'Sign In'}</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+
+          <div className="pt-2 border-t border-[#E7E2DA] dark:border-[#2E2B28] flex items-center justify-between text-xs text-[#57534E]">
+            <span>Need an account?</span>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('SIGN_UP');
+                setErrorMessage(null);
+              }}
+              className="font-semibold text-[#B44C32] dark:text-[#E06D53] hover:underline"
+            >
+              Create Account
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* TAB 2: SIGN UP */}
+      {activeTab === 'SIGN_UP' && (
+        <form onSubmit={handleSignUpSubmit} className="space-y-3.5">
+          <div>
+            <label htmlFor="signup-name-input" className="block text-xs font-medium mb-1">
+              Display Name
+            </label>
+            <input
+              id="signup-name-input"
+              data-testid="signup-name-input"
+              type="text"
+              required
+              value={signupName}
+              onChange={(e) => setSignupName(e.target.value)}
+              placeholder="Enter display name"
+              className="w-full min-h-[40px] px-3.5 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28]"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="signup-email-input" className="block text-xs font-medium mb-1">
+              Email Address or Username
+            </label>
+            <input
+              id="signup-email-input"
+              data-testid="signup-email-input"
+              type="text"
+              required
+              value={signupEmail}
+              onChange={(e) => setSignupEmail(e.target.value)}
+              placeholder="Enter email or username"
+              className="w-full min-h-[40px] px-3.5 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28]"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="signup-password-input" className="block text-xs font-medium mb-1">
+              Create Password
+            </label>
+            <input
+              id="signup-password-input"
+              data-testid="signup-password-input"
+              type={showPassword ? 'text' : 'password'}
+              required
+              minLength={4}
+              value={signupPassword}
+              onChange={(e) => setSignupPassword(e.target.value)}
+              placeholder="Create password"
+              className="w-full min-h-[40px] px-3.5 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28]"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="signup-country-code" className="block text-xs font-medium mb-1">
+              Billing Region (Sets Currency)
+            </label>
+            <select
+              id="signup-country-code"
+              data-testid="signup-country-select"
+              value={selectedCountryCode}
+              onChange={(e) => setSelectedCountryCode(e.target.value)}
+              className="w-full min-h-[40px] px-3.5 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28]"
+            >
+              {countryCodes.map((c) => (
+                <option key={c.countryCode} value={c.countryCode}>
+                  {c.countryName} → {c.currency} ({c.currency === 'INR' ? '₹' : '$'})
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] text-[#57534E] dark:text-[#A8A29E]">
+              Account currency:{' '}
+              <strong className="text-[#181615] dark:text-[#F5F2EB]">
+                {currencyPreview.currency} (
+                {formatMinorCurrency(
+                  currencyPreview.currency === 'INR' ? 29900 : 900,
+                  currencyPreview.currency
+                )}{' '}
+                indicative monthly rate)
+              </strong>
+            </p>
+          </div>
+
+          <label className="flex items-start gap-2.5 text-xs text-[#57534E] dark:text-[#A8A29E] cursor-pointer">
+            <input
+              type="checkbox"
+              checked={acceptedTerms}
+              onChange={(e) => setAcceptedTerms(e.target.checked)}
+              className="mt-0.5 rounded border-[#E7E2DA]"
+            />
+            <span>I accept the privacy notice and terms of service (on-device processing).</span>
+          </label>
+
+          <button
+            type="submit"
+            data-testid="signup-submit-btn"
+            disabled={loading}
+            className="w-full min-h-[44px] px-4 py-2.5 text-sm font-semibold text-[#FAF8F5] bg-[#B44C32] hover:bg-[#9E3F27] rounded-xl transition-all flex items-center justify-center gap-2"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>{loading ? 'Creating Account...' : 'Create Account & Sign In'}</span>
+          </button>
+        </form>
+      )}
+
+      {/* TAB 3: SINGLE UNIFIED PASSWORD / ACCOUNT RESET */}
+      {activeTab === 'RECOVERY' && (
+        <form onSubmit={handleRecoverySubmit} className="space-y-3.5">
+          <div>
+            <label htmlFor="recovery-identifier" className="block text-xs font-medium mb-1">
+              Email Address or Username
+            </label>
+            <input
+              id="recovery-identifier"
+              data-testid="recovery-identifier-input"
+              type="text"
+              required
+              value={recoveryIdentifier}
+              onChange={(e) => setRecoveryIdentifier(e.target.value)}
+              placeholder="Enter email or username"
+              className="w-full min-h-[40px] px-3.5 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28]"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label htmlFor="recovery-code" className="block text-xs font-medium">
+                Verification or Recovery Code
+              </label>
+              <button
+                type="button"
+                data-testid="send-reset-code-btn"
+                onClick={handleSendResetCode}
+                className="text-[11px] font-semibold text-[#B44C32] dark:text-[#E06D53] hover:underline"
+              >
+                Request Verification Code
+              </button>
+            </div>
+            <input
+              id="recovery-code"
+              data-testid="recovery-code-input"
+              type="text"
+              required
+              value={recoveryCodeInput}
+              onChange={(e) => setRecoveryCodeInput(e.target.value)}
+              placeholder="Enter verification or recovery code"
+              className="w-full min-h-[40px] px-3.5 py-2 text-xs font-mono rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28]"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="recovery-new-password" className="block text-xs font-medium mb-1">
+              New Password
+            </label>
+            <input
+              id="recovery-new-password"
+              data-testid="recovery-new-password-input"
+              type={showPassword ? 'text' : 'password'}
+              value={newPasswordInput}
+              onChange={(e) => setNewPasswordInput(e.target.value)}
+              placeholder="Enter new password"
+              className="w-full min-h-[40px] px-3.5 py-2 text-sm rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28]"
+            />
+          </div>
+
+          <button
+            type="submit"
+            data-testid="recovery-submit-btn"
+            disabled={loading}
+            className="w-full min-h-[44px] px-4 py-2.5 text-sm font-semibold text-[#FAF8F5] bg-[#181615] dark:bg-[#F5F2EB] dark:text-[#121110] rounded-xl transition-all flex items-center justify-center gap-2"
+          >
+            <RotateCcw className="w-4 h-4" />
+            <span>{loading ? 'Processing Reset...' : 'Reset Password & Sign In'}</span>
+          </button>
+        </form>
+      )}
+    </div>
+  );
+
+  if (isModal) {
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Sign in, Sign up, or Reset Account"
+        data-testid="auth-dialog-backdrop"
+        onClick={(e) => {
+          if (e.target === e.currentTarget && onClose) {
+            onClose();
+          }
+        }}
+        className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+      >
+        {dialogCard}
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-lg mx-auto px-4 py-12 flex items-center justify-center">
+      {dialogCard}
     </div>
   );
 };
@@ -480,57 +680,102 @@ interface RecoveryKitModalProps {
 export const RecoveryKitModal: React.FC<RecoveryKitModalProps> = ({ codes, onClose }) => {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard?.writeText(codes.join('\n'));
-    setCopied(true);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(codes.join('\n'));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback
+    }
+  };
+
+  const handleDownloadTxt = () => {
+    const content = [
+      'VARNANK STUDIOS — ACCOUNT RECOVERY CODES',
+      '====================================================',
+      'Keep these codes in a safe place. You can use any code in the Password / Account Reset tab.',
+      '',
+      ...codes.map((c, idx) => `${String(idx + 1).padStart(2, '0')}. ${c}`),
+    ].join('\n');
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'varnank-studios-recovery-kit.txt';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
   };
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="One-Time Recovery Kit"
-      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+      aria-labelledby="recovery-kit-title"
+      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
     >
-      <div className="bg-white dark:bg-[#1C1A18] border border-[#E7E2DA] dark:border-[#2E2B28] rounded-2xl max-w-lg w-full p-6 space-y-4">
-        <div className="flex items-center gap-2 text-[#15803D]">
-          <ShieldCheck className="w-5 h-5" />
-          <span className="text-xs font-semibold">Shown Once · Save Your Recovery Codes</span>
+      <div className="max-w-md w-full bg-white dark:bg-[#1C1A18] rounded-2xl border border-[#E7E2DA] dark:border-[#2E2B28] p-6 space-y-5 shadow-xl">
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1">
+            <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Account Created Successfully</span>
+            </div>
+            <h2 id="recovery-kit-title" className="text-lg font-bold">
+              Your Backup Recovery Codes
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-xs px-2.5 py-1 rounded-lg border border-[#E7E2DA] hover:bg-[#FAF8F5]"
+          >
+            Skip / Close
+          </button>
         </div>
-        <h2 className="text-lg font-bold text-[#181615] dark:text-[#F5F2EB]">
-          Your 10 One-Time Account Recovery Codes
-        </h2>
-        <p className="text-xs text-[#57534E] dark:text-[#A8A29E]">
-          These codes allow you to regain access to your account without relying on paid SMS or
-          external providers. We store only one-way hashes, so this is the only time these codes
-          will be shown.
+
+        <p className="text-xs text-[#57534E] dark:text-[#A8A29E] leading-relaxed">
+          Save these backup codes for the Password / Account Reset tab whenever you need to restore
+          your account.
         </p>
 
         <div className="grid grid-cols-2 gap-2 p-3.5 rounded-xl bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA] dark:border-[#2E2B28] font-mono text-xs">
           {codes.map((c) => (
-            <div key={c} className="py-1 px-2 rounded bg-white dark:bg-[#1C1A18]">
+            <div
+              key={c}
+              className="px-2 py-1 rounded bg-white dark:bg-[#1C1A18] border border-[#E7E2DA] dark:border-[#2E2B28] text-center font-semibold"
+            >
               {c}
             </div>
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+        <div className="flex gap-2">
           <button
             type="button"
             onClick={handleCopy}
-            className="min-h-[40px] px-3.5 py-2 text-xs font-medium border border-[#E7E2DA] rounded-lg flex items-center gap-1.5"
+            className="flex-1 min-h-[40px] px-3 py-2 text-xs font-medium rounded-xl border border-[#E7E2DA] dark:border-[#2E2B28] hover:border-[#B44C32] flex items-center justify-center gap-1.5"
           >
-            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copied ? 'Copied to Clipboard' : 'Copy All 10 Codes'}</span>
+            <Copy className="w-3.5 h-3.5" />
+            <span>{copied ? 'Copied!' : 'Copy Codes'}</span>
           </button>
           <button
             type="button"
-            onClick={onClose}
-            className="min-h-[40px] px-5 py-2 text-xs font-semibold text-[#FAF8F5] bg-[#181615] dark:bg-[#E06D53] dark:text-[#121110] rounded-lg"
+            onClick={handleDownloadTxt}
+            className="flex-1 min-h-[40px] px-3 py-2 text-xs font-medium rounded-xl border border-[#E7E2DA] dark:border-[#2E2B28] hover:border-[#B44C32] flex items-center justify-center gap-1.5"
           >
-            I Have Saved My Recovery Kit
+            <Download className="w-3.5 h-3.5" />
+            <span>Download .txt</span>
           </button>
         </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-full min-h-[42px] px-4 py-2 text-xs font-semibold text-[#FAF8F5] bg-[#181615] dark:bg-[#F5F2EB] dark:text-[#121110] rounded-xl"
+        >
+          Continue to Studios
+        </button>
       </div>
     </div>
   );

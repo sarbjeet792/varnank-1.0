@@ -18,7 +18,7 @@ export interface CanvasRenderParams {
   showPrintCropMarks: boolean;
   bleedMm: number;
   redactionBoxes: Array<{ xPct: number; yPct: number; wPct: number; hPct: number }>;
-  idSheetCopies: 1 | 4 | 8;
+  idSheetCopies: 1 | 4 | 8 | 16;
   stampText: string;
   sourceImage: HTMLImageElement | null;
 }
@@ -117,7 +117,7 @@ export function renderStudioCanvas(
         ctx.fillStyle = '#FAF8F5';
         ctx.font = `600 ${Math.max(11, Math.round(w * 0.045))}px "JetBrains Mono", monospace`;
         ctx.textAlign = 'center';
-        ctx.fillText(params.codeLabel || 'ID-P1', cx, h * 0.825);
+        ctx.fillText(params.codeLabel || 'Passport Size', cx, h * 0.825);
       } else if (params.studioId === 'S2') {
         // PDF Studio: Structured document sheet with geometric blocks
         const pad = w * 0.1;
@@ -133,7 +133,7 @@ export function renderStudioCanvas(
 
         ctx.fillStyle = '#FAF8F5';
         ctx.font = `600 ${Math.max(12, Math.round(w * 0.026))}px "JetBrains Mono", monospace`;
-        ctx.fillText(params.codeLabel || 'DOC-S2', pad * 1.6, pad * 1.5 + h * 0.04);
+        ctx.fillText(params.codeLabel || 'Document Sheet', pad * 1.6, pad * 1.5 + h * 0.04);
 
         // Title & subtitle
         ctx.fillStyle = '#181615';
@@ -162,7 +162,7 @@ export function renderStudioCanvas(
 
         ctx.fillStyle = '#FAF8F5';
         ctx.font = `700 ${Math.max(14, Math.round(w * 0.035))}px "Plus Jakarta Sans", sans-serif`;
-        ctx.fillText(params.titleText || 'Varnank Publication Layout P7', margin * 1.5, margin + h * 0.088);
+        ctx.fillText(params.titleText || 'Varnank Publication Layout', margin * 1.5, margin + h * 0.088);
 
         // Two-column abstract geometric vector diagram
         ctx.strokeStyle = '#181615';
@@ -175,14 +175,14 @@ export function renderStudioCanvas(
 
         ctx.fillStyle = '#181615';
         ctx.font = `500 ${Math.max(12, Math.round(w * 0.025))}px "DM Sans", sans-serif`;
-        ctx.fillText(params.subtitleText || 'Edition Code: PUB-S4-01', w * 0.52, h * 0.36);
+        ctx.fillText(params.subtitleText || 'Archival Press Edition', w * 0.52, h * 0.36);
 
         ctx.fillStyle = '#D6D0C4';
         for (let i = 0; i < 4; i++) {
           ctx.fillRect(w * 0.52, h * 0.42 + i * (h * 0.07), w * 0.34, h * 0.03);
         }
       } else {
-        // Studio S1: Photo/Image Studio abstract architectural geometry
+        // Photo/Image Studio abstract architectural geometry
         const pad = w * 0.08;
         ctx.fillStyle = '#EFECE6';
         ctx.fillRect(pad, pad, w - pad * 2, h - pad * 2);
@@ -202,7 +202,7 @@ export function renderStudioCanvas(
 
         ctx.fillStyle = '#181615';
         ctx.font = `700 ${Math.max(15, Math.round(w * 0.034))}px "Plus Jakarta Sans", sans-serif`;
-        ctx.fillText(params.titleText || 'Studio S1 Visual Frame', pad * 1.4, h * 0.82);
+        ctx.fillText(params.titleText || 'Varnank Visual Frame', pad * 1.4, h * 0.82);
 
         ctx.fillStyle = '#57534E';
         ctx.font = `500 ${Math.max(11, Math.round(w * 0.022))}px "JetBrains Mono", monospace`;
@@ -213,14 +213,14 @@ export function renderStudioCanvas(
     ctx.restore();
   };
 
-  // 2. Render either single work item or gated Multi-Copy ID Print Sheet (4-up / 8-up)
+  // 2. Render either single work item or gated Multi-Copy ID Print Sheet (4-up / 8-up / 16-up)
   if (params.studioId === 'S3' && params.idSheetCopies > 1) {
-    const cols = params.idSheetCopies === 8 ? 2 : 2;
-    const rows = params.idSheetCopies === 8 ? 4 : 2;
-    const padX = canvas.width * 0.08;
-    const padY = canvas.height * 0.06;
-    const gapX = canvas.width * 0.05;
-    const gapY = canvas.height * 0.035;
+    const cols = params.idSheetCopies === 16 ? 4 : 2;
+    const rows = params.idSheetCopies === 16 ? 4 : params.idSheetCopies === 8 ? 4 : 2;
+    const padX = canvas.width * 0.06;
+    const padY = canvas.height * 0.05;
+    const gapX = canvas.width * 0.035;
+    const gapY = canvas.height * 0.03;
     const cellW = (canvas.width - padX * 2 - gapX * (cols - 1)) / cols;
     const cellH = (canvas.height - padY * 2 - gapY * (rows - 1)) / rows;
 
@@ -235,7 +235,7 @@ export function renderStudioCanvas(
         ctx.setLineDash([6, 4]);
         ctx.strokeStyle = '#78716C';
         ctx.lineWidth = 1;
-        ctx.strokeRect(cx - 4, cy - 4, cellW + 8, cellH + 8);
+        ctx.strokeRect(cx - 3, cy - 3, cellW + 6, cellH + 6);
         ctx.restore();
       }
     }
@@ -334,10 +334,15 @@ export function renderStudioCanvas(
 
 /**
  * Generates a valid, self-contained single-page PDF document directly in browser memory
- * wrapping the rendered JPEG bytes from the canvas (100% client-side, zero upload).
+ * wrapping the rendered JPEG bytes from the canvas at the specified quality and DPI (100% client-side, zero upload).
  */
-export async function exportCanvasAsLocalPdfBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+export async function exportCanvasAsLocalPdfBlob(
+  canvas: HTMLCanvasElement,
+  qualityPct = 92,
+  dpi = 150
+): Promise<Blob> {
+  const normalizedQuality = Math.min(1, Math.max(0.5, qualityPct / 100));
+  const dataUrl = canvas.toDataURL('image/jpeg', normalizedQuality);
   const base64 = dataUrl.split(',')[1] || '';
   const binaryStr = atob(base64);
   const imgBytes = new Uint8Array(binaryStr.length);
@@ -345,8 +350,9 @@ export async function exportCanvasAsLocalPdfBlob(canvas: HTMLCanvasElement): Pro
     imgBytes[i] = binaryStr.charCodeAt(i);
   }
 
-  const wPt = Math.round((canvas.width * 72) / 150);
-  const hPt = Math.round((canvas.height * 72) / 150);
+  const effectiveDpi = Math.max(72, dpi);
+  const wPt = Math.max(72, Math.round((canvas.width * 72) / effectiveDpi));
+  const hPt = Math.max(72, Math.round((canvas.height * 72) / effectiveDpi));
 
   const encoder = new TextEncoder();
   const chunks: Uint8Array[] = [];
@@ -405,6 +411,26 @@ export async function exportCanvasAsLocalPdfBlob(canvas: HTMLCanvasElement): Pro
   );
 
   return new Blob(chunks as unknown as BlobPart[], { type: 'application/pdf' });
+}
+
+/**
+ * Generates a self-contained scalable SVG vector sheet wrapping the current canvas artwork
+ * and vector crop/registration geometry (100% client-side, zero upload).
+ */
+export function exportCanvasAsLocalSvgBlob(
+  canvas: HTMLCanvasElement,
+  codeLabel: string,
+  dpi = 300
+): Blob {
+  const pngDataUrl = canvas.toDataURL('image/png');
+  const w = canvas.width;
+  const h = canvas.height;
+  const svgContent = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" data-dpi="${dpi}" data-code="${codeLabel.replace(/"/g, '')}">
+  <title>Varnank Studios Local SVG Export (${codeLabel} · ${dpi} DPI)</title>
+  <image href="${pngDataUrl}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="xMidYMid meet" />
+</svg>`;
+  return new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
 }
 
 /**

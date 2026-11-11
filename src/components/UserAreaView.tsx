@@ -127,6 +127,7 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
     'GENERAL'
   );
   const [deleteConfirmText, setDeleteConfirmText] = useState<string>('');
+  const [newPasswordInput, setNewPasswordInput] = useState<string>('');
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const planDef = INITIAL_PLANS[entitlement.planId] || INITIAL_PLANS.FREE;
@@ -184,6 +185,26 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
     if (resp.ok && data.oneTimeRecoveryKit) {
       onShowNewRecoveryKit(data.oneTimeRecoveryKit);
       await onRefreshUser();
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPasswordInput.trim()) return;
+    const resp = await fetch('/api/user/change-password', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({ newPassword: newPasswordInput.trim() }),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      setNewPasswordInput('');
+      setFeedback('Your account password has been updated.');
+    } else {
+      setFeedback(data.error || 'Could not update password.');
     }
   };
 
@@ -320,6 +341,12 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
               onClick={() => {
                 setFeedback(null);
                 setActiveTab(tab);
+                if (typeof document !== 'undefined') {
+                  const el = document.getElementById('user-area-tab-panel');
+                  if (el && typeof el.scrollIntoView === 'function') {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                  }
+                }
               }}
               className={`min-h-[40px] px-3.5 py-1.5 text-xs font-medium rounded-lg transition-colors ${
                 activeTab === tab
@@ -328,12 +355,12 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
               }`}
             >
               {tab === 'DASHBOARD'
-                ? 'Home / Dashboard'
+                ? `Home / Dashboard (${localRecentActivity.length} local tasks)`
                 : tab === 'PROFILE'
                 ? 'Profile'
                 : tab === 'ACCOUNT'
-                ? 'Account & Security'
-                : 'Help / Support'}
+                ? `Account & Security (${activeSessions.length} active)`
+                : `Help / Support (${tickets.length})`}
             </button>
           ))}
           <button
@@ -353,6 +380,7 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
         </div>
       )}
 
+      <div id="user-area-tab-panel">
       {/* TAB 1: HOME / DASHBOARD (Section U) */}
       {activeTab === 'DASHBOARD' && (
         <div className="mt-6 space-y-6">
@@ -361,7 +389,7 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
             <div className="p-4 rounded-xl bg-white dark:bg-[#1C1A18] border border-[#E7E2DA] dark:border-[#2E2B28] space-y-1">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-[#B44C32] dark:text-[#E06D53]">
                 <Bell className="w-3.5 h-3.5" />
-                <span>Platform Notice</span>
+                <span>Platform Notice ({notices.length})</span>
               </div>
               {notices.map((n) => (
                 <div key={n.id} className="text-xs text-[#181615] dark:text-[#F5F2EB]">
@@ -372,12 +400,12 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
             </div>
           )}
 
-          {/* Plan Status, Expiry, Usage Meters & Conditional Upgrade Prompt */}
+          {/* Plan Status, Expiry, Progressive Usage Meters & Conditional Upgrade Prompt */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
             <div className="p-5 rounded-xl bg-white dark:bg-[#1C1A18] border border-[#E7E2DA] dark:border-[#2E2B28] space-y-2">
               <div className="text-xs text-[#57534E] dark:text-[#A8A29E]">Current Plan</div>
               <div className="text-xl font-bold text-[#181615] dark:text-[#F5F2EB]">
-                {planDef.name} ({planDef.codeLabel})
+                {planDef.name}
               </div>
               <div className="text-xs font-mono text-[#57534E] dark:text-[#A8A29E]">
                 Status: {entitlement.state}
@@ -388,11 +416,33 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
             </div>
 
             <div className="p-5 rounded-xl bg-white dark:bg-[#1C1A18] border border-[#E7E2DA] dark:border-[#2E2B28] space-y-2">
-              <div className="text-xs text-[#57534E] dark:text-[#A8A29E]">Daily Usage Meter</div>
+              <div className="flex items-center justify-between text-xs text-[#57534E] dark:text-[#A8A29E]">
+                <span>Daily Usage Meter</span>
+                <span className="font-mono">
+                  {localRecentActivity.length} session export(s)
+                </span>
+              </div>
               <div className="text-xl font-bold font-mono tabular-nums text-[#181615] dark:text-[#F5F2EB]">
-                {userData.dailyExportsUsed} /{' '}
+                {Math.max(userData.dailyExportsUsed, localRecentActivity.length)} /{' '}
                 {planDef.dailyExportLimit === -1 ? 'Unlimited' : planDef.dailyExportLimit}
               </div>
+              {planDef.dailyExportLimit !== -1 && (
+                <div className="w-full h-1.5 rounded-full bg-[#E7E2DA] dark:bg-[#2E2B28] overflow-hidden">
+                  <div
+                    className="h-full bg-[#B44C32] transition-all duration-300"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.round(
+                          (Math.max(userData.dailyExportsUsed, localRecentActivity.length) /
+                            Math.max(1, planDef.dailyExportLimit)) *
+                            100
+                        )
+                      )}%`,
+                    }}
+                  />
+                </div>
+              )}
               <div className="text-xs text-[#57534E] dark:text-[#A8A29E]">
                 Exports completed today · Max batch: {planDef.batchLimit} files
               </div>
@@ -442,7 +492,7 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
                 onClick={onLaunchStudio}
                 className="min-h-[44px] px-4 py-2 text-xs font-semibold text-[#FAF8F5] bg-[#181615] dark:bg-[#F5F2EB] dark:text-[#121110] rounded-lg"
               >
-                Open Studio Workspace (S1–S4)
+                Open Studio Workspace
               </button>
             </div>
 
@@ -705,6 +755,32 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
               </button>
             </div>
 
+            <form
+              onSubmit={handleChangePassword}
+              className="pt-2 border-t border-[#E7E2DA] space-y-2"
+            >
+              <div className="text-xs font-semibold">Change Account Password</div>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  required
+                  minLength={4}
+                  data-testid="user-change-password-input"
+                  value={newPasswordInput}
+                  onChange={(e) => setNewPasswordInput(e.target.value)}
+                  placeholder="Enter new password"
+                  className="flex-1 min-h-[38px] px-3 py-1.5 text-xs rounded-lg bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA]"
+                />
+                <button
+                  type="submit"
+                  data-testid="user-change-password-btn"
+                  className="min-h-[38px] px-3 py-1.5 text-xs font-semibold text-white bg-[#181615] hover:bg-[#B44C32] rounded-lg transition-colors"
+                >
+                  Update Password
+                </button>
+              </div>
+            </form>
+
             <div className="pt-2 border-t border-[#E7E2DA] space-y-2">
               <div className="text-xs font-semibold">Active Sessions &amp; Devices</div>
               {activeSessions.map((ses) => (
@@ -770,8 +846,8 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
               <div className="flex gap-2">
                 <input
                   type="text"
-                  aria-label="Type DELETE to confirm account erasure"
-                  placeholder="Type DELETE"
+                  aria-label="Confirm permanent account erasure"
+                  placeholder="Enter confirmation word"
                   value={deleteConfirmText}
                   onChange={(e) => setDeleteConfirmText(e.target.value)}
                   className="flex-1 min-h-[40px] px-3 py-1.5 text-xs font-mono rounded-lg bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA]"
@@ -828,7 +904,7 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
                 required
                 value={ticketSubject}
                 onChange={(e) => setTicketSubject(e.target.value)}
-                placeholder="Brief summary of your question"
+                placeholder="Enter subject"
                 className="w-full min-h-[40px] px-3 py-1.5 text-xs rounded-lg bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA]"
               />
             </div>
@@ -843,7 +919,7 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
                 required
                 value={ticketMessage}
                 onChange={(e) => setTicketMessage(e.target.value)}
-                placeholder="Describe how we can help (include any ERR-XXXX reference code if shown)"
+                placeholder="Enter message details"
                 className="w-full p-3 text-xs rounded-lg bg-[#FAF8F5] dark:bg-[#262320] border border-[#E7E2DA]"
               />
             </div>
@@ -884,6 +960,7 @@ export const UserAreaView: React.FC<UserAreaProps> = ({
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 };

@@ -21,9 +21,13 @@ export type AdminCategory =
   | 'SECURITY_AUDIT'
   | 'INTEGRATIONS_VAULT'
   | 'OFFERS_PRICING'
+  | 'DEVELOPER'
+  | 'QA_TESTER'
   | 'SUPER_USER';
 
 export type StudioId = 'S1' | 'S2' | 'S3' | 'S4';
+
+export type ExportFormatCode = 'PNG' | 'JPEG' | 'WEBP' | 'SVG' | 'PDF' | 'ZIP';
 
 export type OfferTemplateType =
   | 'PERCENTAGE'
@@ -47,7 +51,12 @@ export interface PlanDefinition {
   graceHours: number;
   maxDevices: number;
   dailyExportLimit: number; // -1 = unlimited
-  batchLimit: number;
+  batchLimit: number; // max files in batch/ZIP
+  maxExportQualityPct: number; // 80..100
+  maxExportDpi: number; // 150, 300, 600
+  maxResolutionPx: number; // max canvas width/height px
+  maxIdSheetCopies: 1 | 4 | 8 | 16;
+  allowedFormats: ExportFormatCode[];
   unlocksPaidBundles: boolean;
   unlocksPremiumAutomation: boolean;
   prices: {
@@ -99,12 +108,14 @@ export interface StudioToolDefinition {
   plainDescription: string;
   tier: 'FREE' | 'PAID' | 'PREMIUM';
   bundleId: string | null;
+  enabled?: boolean;
 }
 
 export interface PresetDefinition {
   id: string;
   codeLabel: string;
   studioId: StudioId;
+  applicableToolIds?: string[];
   category: 'SIZE' | 'TEMPLATE' | 'EXPORT_PROFILE';
   name: string;
   dimensionsLabel: string;
@@ -131,14 +142,19 @@ export const DEFAULT_COUNTRY_CURRENCY_TABLE: CountryCurrencyEntry[] = [
 export const INITIAL_PLANS: Record<PlanId, PlanDefinition> = {
   NONE: {
     id: 'NONE',
-    codeLabel: 'L0',
+    codeLabel: 'Guest',
     name: 'Guest Access',
     audienceLabel: 'For quick single-file checks without an account',
     durationHours: 0,
     graceHours: 0,
     maxDevices: 1,
-    dailyExportLimit: 5,
+    dailyExportLimit: 3, // Strictly 3 files per day for Free/Guest
     batchLimit: 1,
+    maxExportQualityPct: 80,
+    maxExportDpi: 150,
+    maxResolutionPx: 1200,
+    maxIdSheetCopies: 1,
+    allowedFormats: ['PNG', 'JPEG'],
     unlocksPaidBundles: false,
     unlocksPremiumAutomation: false,
     prices: {
@@ -146,22 +162,27 @@ export const INITIAL_PLANS: Record<PlanId, PlanDefinition> = {
       USD: { baseMinor: 0, slashedMinor: 0, taxInclusive: true },
     },
     features: [
-      'Up to 5 single-file exports per day',
-      'Core tools across all 4 Studios on your device',
-      'Standard size & format presets',
+      'Strictly 3 single-file exports per day (PNG / JPEG)',
+      'Explore paid/premium studio features with sample watermark (80% · 72 DPI)',
+      'Core free tools across all 4 Studios on your device',
       'Immediate memory cleanup when closing tab',
     ],
   },
   FREE: {
     id: 'FREE',
-    codeLabel: 'L1',
+    codeLabel: 'Free',
     name: 'Freemium Account',
     audienceLabel: 'For everyday personal tasks with saved preferences',
     durationHours: 0,
     graceHours: 0,
     maxDevices: 2,
-    dailyExportLimit: 20,
+    dailyExportLimit: 3, // Strictly 3 files per day for Free/Freemium
     batchLimit: 1,
+    maxExportQualityPct: 85,
+    maxExportDpi: 150,
+    maxResolutionPx: 1600,
+    maxIdSheetCopies: 1,
+    allowedFormats: ['PNG', 'JPEG', 'WEBP', 'PDF'],
     unlocksPaidBundles: false,
     unlocksPremiumAutomation: false,
     prices: {
@@ -169,22 +190,27 @@ export const INITIAL_PLANS: Record<PlanId, PlanDefinition> = {
       USD: { baseMinor: 0, slashedMinor: 0, taxInclusive: true },
     },
     features: [
-      'Up to 20 single-file exports per day',
+      'Strictly 3 single-file exports per day (PNG, JPEG, WebP, PDF)',
+      'Check & analyze watermarked paid samples capped at 80% quality · 72 DPI',
       'Save custom local presets on your device',
-      'Local-only recent activity log with one-click clear',
       'Multi-language & theme preferences synced to profile',
     ],
   },
   PASS_24H: {
     id: 'PASS_24H',
-    codeLabel: 'L2',
+    codeLabel: 'Day Pass',
     name: 'Paid Per-Day Pass',
     audienceLabel: 'For urgent one-day ID sheets, redaction, or print jobs',
     durationHours: 24,
     graceHours: 0, // Strict zero grace for 24h pass
     maxDevices: 2,
     dailyExportLimit: -1,
-    batchLimit: 20,
+    batchLimit: 25,
+    maxExportQualityPct: 95,
+    maxExportDpi: 300,
+    maxResolutionPx: 2400,
+    maxIdSheetCopies: 8,
+    allowedFormats: ['PNG', 'JPEG', 'WEBP', 'SVG', 'PDF', 'ZIP'],
     unlocksPaidBundles: true,
     unlocksPremiumAutomation: false,
     prices: {
@@ -192,15 +218,15 @@ export const INITIAL_PLANS: Record<PlanId, PlanDefinition> = {
       USD: { baseMinor: 249, slashedMinor: 299, taxInclusive: true }, // $2.49 (slashed from $2.99)
     },
     features: [
-      '24-hour full access to all Paid Studio tools & presets',
-      'Multi-copy ID & Passport print sheets (A4 / 4x6)',
-      'Permanent PDF region redaction & metadata cleaner',
-      'Batch processing up to 20 files at once on your device',
+      '24-hour unlimited exports across PNG, JPEG, WebP, SVG, PDF & ZIP',
+      'High-definition 95% quality · 300 DPI print output · 2400px max',
+      'Multi-copy ID & Passport print sheets (up to 8-up on A4 / 4×6)',
+      'Permanent PDF redaction + Batch ZIP up to 25 files at once',
     ],
   },
   PRO_MONTHLY: {
     id: 'PRO_MONTHLY',
-    codeLabel: 'L3',
+    codeLabel: 'Monthly',
     name: 'Paid Monthly Plan',
     audienceLabel: 'For regular creators, professionals, and shop operators',
     durationHours: 24 * 30,
@@ -208,6 +234,11 @@ export const INITIAL_PLANS: Record<PlanId, PlanDefinition> = {
     maxDevices: 2,
     dailyExportLimit: -1,
     batchLimit: 50,
+    maxExportQualityPct: 100,
+    maxExportDpi: 300,
+    maxResolutionPx: 3600,
+    maxIdSheetCopies: 16,
+    allowedFormats: ['PNG', 'JPEG', 'WEBP', 'SVG', 'PDF', 'ZIP'],
     unlocksPaidBundles: true,
     unlocksPremiumAutomation: false,
     prices: {
@@ -215,15 +246,15 @@ export const INITIAL_PLANS: Record<PlanId, PlanDefinition> = {
       USD: { baseMinor: 799, slashedMinor: 999, taxInclusive: true }, // $7.99 (slashed from $9.99)
     },
     features: [
-      '30-day unlimited exports across all 4 Studios',
-      'All Paid tools: Batch up to 50 files, Redaction, Multi-ID sheets',
-      'Print bleed, trim & crop marks for publication layouts',
-      'Up to 2 active devices + downloadable tax invoices',
+      '30-day unlimited lossless 100% quality · 300 DPI · 3600px max',
+      'All Paid tools: Batch ZIP up to 50 files, Redaction, 16-up ID sheets',
+      'Print bleed (3mm/5mm), trim & crop marks for publication layouts',
+      'Up to 2 active devices + downloadable GST/Tax invoices',
     ],
   },
   PREMIUM_ANNUAL: {
     id: 'PREMIUM_ANNUAL',
-    codeLabel: 'L4',
+    codeLabel: 'Annual',
     name: 'Premium Annual Plan',
     audienceLabel: 'For power users, studios, and publication workflows',
     durationHours: 24 * 365,
@@ -231,6 +262,11 @@ export const INITIAL_PLANS: Record<PlanId, PlanDefinition> = {
     maxDevices: 4,
     dailyExportLimit: -1,
     batchLimit: 100,
+    maxExportQualityPct: 100,
+    maxExportDpi: 600,
+    maxResolutionPx: 4800,
+    maxIdSheetCopies: 16,
+    allowedFormats: ['PNG', 'JPEG', 'WEBP', 'SVG', 'PDF', 'ZIP'],
     unlocksPaidBundles: true,
     unlocksPremiumAutomation: true,
     prices: {
@@ -239,8 +275,8 @@ export const INITIAL_PLANS: Record<PlanId, PlanDefinition> = {
     },
     features: [
       '365-day full access to every Paid & Premium tool bundle',
-      'High-capacity batch mode (up to 100 files, device RAM guarded)',
-      'Automated multi-slot publication & ID sheet imposition',
+      'Archival 100% lossless master · up to 600 DPI · 4800px max',
+      'High-capacity batch mode (up to 100 files) & 16-up imposition',
       'Up to 4 concurrent devices & priority support queue',
     ],
   },
@@ -284,164 +320,262 @@ export const INITIAL_OFFERS: OfferRule[] = [
 ];
 
 export const STUDIO_TOOLS: StudioToolDefinition[] = [
-  // Studio S1: Photo/Image Studio
+  // Photo / Image Studio (6 Tools)
   {
     id: 'T1',
-    codeLabel: 'T1',
+    codeLabel: 'Photo Tool',
     studioId: 'S1',
     name: 'Crop, Resize & Aspect Frame',
     plainDescription: 'Trim edges, set exact pixel or millimeter dimensions, and lock aspect ratios.',
     tier: 'FREE',
     bundleId: null,
+    enabled: true,
   },
   {
     id: 'T2',
-    codeLabel: 'T2',
+    codeLabel: 'Photo Tool',
     studioId: 'S1',
-    name: 'Format Convert & Compress',
+    name: 'Format Convert & Smart Compress',
     plainDescription: 'Convert between PNG, JPEG, and WebP while controlling target file size.',
     tier: 'FREE',
     bundleId: null,
+    enabled: true,
   },
   {
     id: 'T3',
-    codeLabel: 'T3',
+    codeLabel: 'Photo Tool',
     studioId: 'S1',
     name: 'Tone, Contrast & Warmth Balance',
     plainDescription: 'Adjust brightness, contrast, saturation, and clean studio background lighting.',
     tier: 'FREE',
     bundleId: null,
+    enabled: true,
   },
   {
     id: 'T4',
-    codeLabel: 'T4',
+    codeLabel: 'Photo Tool',
     studioId: 'S1',
     name: 'Batch Image Processor & Watermark',
     plainDescription: 'Apply resizing, compression, and protective text marks across up to 100 files at once.',
     tier: 'PAID',
     bundleId: 'BUNDLE_S1_PRO_BATCH',
+    enabled: true,
+  },
+  {
+    id: 'T17',
+    codeLabel: 'Photo Tool',
+    studioId: 'S1',
+    name: 'EXIF & GPS Privacy Scrubber',
+    plainDescription: 'Strip hidden camera serials, timestamps, and GPS coordinates locally before export.',
+    tier: 'FREE',
+    bundleId: null,
+    enabled: true,
+  },
+  {
+    id: 'T18',
+    codeLabel: 'Photo Tool',
+    studioId: 'S1',
+    name: '600 DPI Archival Upscale & Border Frame',
+    plainDescription: 'Render gallery-grade bordered frames with 300–600 DPI metadata and custom matte margins.',
+    tier: 'PAID',
+    bundleId: 'BUNDLE_S1_PRO_ARCHIVAL',
+    enabled: true,
   },
 
-  // Studio S2: PDF Studio
+  // PDF Studio (6 Tools)
   {
     id: 'T5',
-    codeLabel: 'T5',
+    codeLabel: 'PDF Tool',
     studioId: 'S2',
     name: 'Page Merge, Split & Reorder',
     plainDescription: 'Combine documents, extract specific page ranges, or rotate individual pages.',
     tier: 'FREE',
     bundleId: null,
+    enabled: true,
   },
   {
     id: 'T6',
-    codeLabel: 'T6',
+    codeLabel: 'PDF Tool',
     studioId: 'S2',
     name: 'Images to Clean Document',
     plainDescription: 'Place scanned pages or photos into a clean, standardized multi-page PDF.',
     tier: 'FREE',
     bundleId: null,
+    enabled: true,
+  },
+  {
+    id: 'T19',
+    codeLabel: 'PDF Tool',
+    studioId: 'S2',
+    name: 'Document Margin & Page Size Standardizer',
+    plainDescription: 'Normalize mixed page sizes into uniform A4, US Letter, or Legal margins.',
+    tier: 'FREE',
+    bundleId: null,
+    enabled: true,
   },
   {
     id: 'T7',
-    codeLabel: 'T7',
+    codeLabel: 'PDF Tool',
     studioId: 'S2',
     name: 'Permanent Region Redaction & Metadata Wipe',
     plainDescription: 'Black out confidential text/numbers permanently and strip hidden author metadata.',
     tier: 'PAID',
     bundleId: 'BUNDLE_S2_PRO_REDACT',
+    enabled: true,
   },
   {
     id: 'T8',
-    codeLabel: 'T8',
+    codeLabel: 'PDF Tool',
     studioId: 'S2',
     name: 'Batch Document Numbering & Stamping',
     plainDescription: 'Add sequential page numbers, date stamps, or approval labels across multiple PDFs.',
     tier: 'PAID',
     bundleId: 'BUNDLE_S2_PRO_STAMP',
+    enabled: true,
+  },
+  {
+    id: 'T20',
+    codeLabel: 'PDF Tool',
+    studioId: 'S2',
+    name: 'Archival Flatten & Tamper-Seal Stamp',
+    plainDescription: 'Flatten interactive layers into a single locked rasterized archival PDF sheet.',
+    tier: 'PREMIUM',
+    bundleId: 'BUNDLE_S2_PREMIUM_FLATTEN',
+    enabled: true,
   },
 
-  // Studio S3: ID/Govt. ID Studio
+  // ID / Govt. ID Studio (6 Tools)
   {
     id: 'T9',
-    codeLabel: 'T9',
+    codeLabel: 'ID Tool',
     studioId: 'S3',
     name: 'Standard ID & Passport Dimension Formatter',
     plainDescription: 'Align and crop to exact official size presets (35×45mm, 50×50mm, 25×35mm) with guide grid.',
     tier: 'FREE',
     bundleId: null,
+    enabled: true,
   },
   {
     id: 'T10',
-    codeLabel: 'T10',
+    codeLabel: 'ID Tool',
     studioId: 'S3',
     name: 'Signature Strip & Contrast Cleaner',
     plainDescription: 'Format signature boxes (e.g. 60×20mm) with crisp ink contrast on a clean white backing.',
     tier: 'FREE',
     bundleId: null,
+    enabled: true,
+  },
+  {
+    id: 'T21',
+    codeLabel: 'ID Tool',
+    studioId: 'S3',
+    name: 'Strict KB Target Size Compressor (20KB–50KB)',
+    plainDescription: 'Target exact portal upload file-size rules (e.g. 20KB–50KB JPEG) locally on your device.',
+    tier: 'FREE',
+    bundleId: null,
+    enabled: true,
   },
   {
     id: 'T11',
-    codeLabel: 'T11',
+    codeLabel: 'ID Tool',
     studioId: 'S3',
     name: 'Multi-Copy ID Print Sheet (A4 & 4×6)',
     plainDescription: 'Generate ready-to-print 4-up, 8-up, or 16-up photo & signature sheets with scissor cut lines.',
     tier: 'PAID',
     bundleId: 'BUNDLE_S3_PRO_IDSHEET',
+    enabled: true,
   },
   {
     id: 'T12',
-    codeLabel: 'T12',
+    codeLabel: 'ID Tool',
     studioId: 'S3',
     name: 'ID Document Privacy Masker (Selective Blur/Block)',
     plainDescription: 'Mask partial reference characters on ID scans before sharing copies, with auto-wipe on close.',
     tier: 'PAID',
     bundleId: 'BUNDLE_S3_PRO_MASK',
+    enabled: true,
+  },
+  {
+    id: 'T22',
+    codeLabel: 'ID Tool',
+    studioId: 'S3',
+    name: 'Combo Photo + Signature Portal Sheet Builder',
+    plainDescription: 'Combine aligned ID portrait frame and signature strip into a single compliant submission card.',
+    tier: 'PAID',
+    bundleId: 'BUNDLE_S3_PRO_COMBO',
+    enabled: true,
   },
 
-  // Studio S4: Print & Publication Studio
+  // Print & Publication Studio (6 Tools)
   {
     id: 'T13',
-    codeLabel: 'T13',
+    codeLabel: 'Print Tool',
     studioId: 'S4',
     name: 'Publication Card & Notice Composer',
     plainDescription: 'Lay out structured cards, certificates, and flyers using clean typographic grids.',
     tier: 'FREE',
     bundleId: null,
+    enabled: true,
   },
   {
     id: 'T14',
-    codeLabel: 'T14',
+    codeLabel: 'Print Tool',
     studioId: 'S4',
     name: 'Vector Emblem & Label Generator',
     plainDescription: 'Create geometric vector seals, monograms, and reference labels in crisp SVG or PNG.',
     tier: 'FREE',
     bundleId: null,
+    enabled: true,
+  },
+  {
+    id: 'T23',
+    codeLabel: 'Print Tool',
+    studioId: 'S4',
+    name: 'Spine, Fold & Gutter Margin Calculator',
+    plainDescription: 'Preview booklet fold lines, spine width, and safe inner gutter margins on canvas.',
+    tier: 'FREE',
+    bundleId: null,
+    enabled: true,
   },
   {
     id: 'T15',
-    codeLabel: 'T15',
+    codeLabel: 'Print Tool',
     studioId: 'S4',
     name: 'Print Bleed, Trim & Registration Marks',
     plainDescription: 'Export press-ready sheets with 3mm/5mm bleed margins, corner crop marks, and registration targets.',
     tier: 'PAID',
     bundleId: 'BUNDLE_S4_PRO_PRESS',
+    enabled: true,
+  },
+  {
+    id: 'T24',
+    codeLabel: 'Print Tool',
+    studioId: 'S4',
+    name: 'High-DPI Vector SVG & CMYK Proof Sheet',
+    plainDescription: 'Export scalable vector SVG layouts and 300/600 DPI press proof sheets with color bars.',
+    tier: 'PAID',
+    bundleId: 'BUNDLE_S4_PRO_SVG',
+    enabled: true,
   },
   {
     id: 'T16',
-    codeLabel: 'T16',
+    codeLabel: 'Print Tool',
     studioId: 'S4',
     name: 'Multi-Slot Data Merge & Imposition Automation',
     plainDescription: 'Populate local CSV/table rows into multi-up print layouts in a single browser-side batch.',
     tier: 'PREMIUM',
     bundleId: 'BUNDLE_S4_PREMIUM_IMPOSE',
+    enabled: true,
   },
 ];
 
 export const INITIAL_PRESETS: PresetDefinition[] = [
+  // ID / Govt. ID Studio Presets (Contextually linked to specific ID tools)
   {
     id: 'P1',
-    codeLabel: 'ID-P1',
+    codeLabel: 'Passport Size',
     studioId: 'S3',
+    applicableToolIds: ['T9', 'T22'],
     category: 'SIZE',
     name: 'Standard Passport Size (35 × 45 mm)',
     dimensionsLabel: '35 × 45 mm · 300 DPI',
@@ -454,8 +588,9 @@ export const INITIAL_PRESETS: PresetDefinition[] = [
   },
   {
     id: 'P2',
-    codeLabel: 'ID-P2',
+    codeLabel: 'Visa Size',
     studioId: 'S3',
+    applicableToolIds: ['T9'],
     category: 'SIZE',
     name: 'Square Visa / Application Size (50 × 50 mm)',
     dimensionsLabel: '50 × 50 mm · 300 DPI',
@@ -468,8 +603,9 @@ export const INITIAL_PRESETS: PresetDefinition[] = [
   },
   {
     id: 'P3',
-    codeLabel: 'ID-P3',
+    codeLabel: 'Signature Strip',
     studioId: 'S3',
+    applicableToolIds: ['T10', 'T22'],
     category: 'SIZE',
     name: 'Official Signature Strip (60 × 20 mm)',
     dimensionsLabel: '60 × 20 mm · 300 DPI',
@@ -482,8 +618,9 @@ export const INITIAL_PRESETS: PresetDefinition[] = [
   },
   {
     id: 'P4',
-    codeLabel: 'ID-P4',
+    codeLabel: '8-Copy Sheet',
     studioId: 'S3',
+    applicableToolIds: ['T11', 'T22'],
     category: 'TEMPLATE',
     name: '4×6 Inch 8-Copy ID Print Sheet',
     dimensionsLabel: '102 × 152 mm · Cut Marks',
@@ -495,9 +632,42 @@ export const INITIAL_PRESETS: PresetDefinition[] = [
     isGlobal: true,
   },
   {
+    id: 'P9',
+    codeLabel: 'Stamp Size',
+    studioId: 'S3',
+    applicableToolIds: ['T9'],
+    category: 'SIZE',
+    name: 'PAN / Exam Portal Stamp Size (25 × 35 mm)',
+    dimensionsLabel: '25 × 35 mm · 300 DPI',
+    widthPx: 295,
+    heightPx: 413,
+    dpi: 300,
+    bleedMm: 0,
+    tier: 'FREE',
+    isGlobal: true,
+  },
+  {
+    id: 'P10',
+    codeLabel: '16-Copy Sheet',
+    studioId: 'S3',
+    applicableToolIds: ['T11'],
+    category: 'TEMPLATE',
+    name: 'A4 16-Copy Studio ID Master Sheet',
+    dimensionsLabel: '210 × 297 mm · 16-Up Cut Grid',
+    widthPx: 1600,
+    heightPx: 2260,
+    dpi: 300,
+    bleedMm: 3,
+    tier: 'PAID',
+    isGlobal: true,
+  },
+
+  // Photo / Image Studio Presets (Contextually linked to framing, batch, and archival tools)
+  {
     id: 'P5',
-    codeLabel: 'Preset P5',
+    codeLabel: 'Square Frame',
     studioId: 'S1',
+    applicableToolIds: ['T1', 'T4'],
     category: 'SIZE',
     name: 'Square Product & Catalog Frame (1200 × 1200 px)',
     dimensionsLabel: '1200 × 1200 px · 1:1',
@@ -509,9 +679,42 @@ export const INITIAL_PRESETS: PresetDefinition[] = [
     isGlobal: true,
   },
   {
+    id: 'P11',
+    codeLabel: 'Widescreen',
+    studioId: 'S1',
+    applicableToolIds: ['T1', 'T4'],
+    category: 'SIZE',
+    name: 'Widescreen Editorial Cover (1600 × 900 px)',
+    dimensionsLabel: '1600 × 900 px · 16:9',
+    widthPx: 1600,
+    heightPx: 900,
+    dpi: 150,
+    bleedMm: 0,
+    tier: 'FREE',
+    isGlobal: true,
+  },
+  {
+    id: 'P12',
+    codeLabel: 'Archival Print',
+    studioId: 'S1',
+    applicableToolIds: ['T18'],
+    category: 'EXPORT_PROFILE',
+    name: 'High-Resolution Archival Print Master (2400 × 1800 px)',
+    dimensionsLabel: '2400 × 1800 px · 300 DPI Lossless',
+    widthPx: 2400,
+    heightPx: 1800,
+    dpi: 300,
+    bleedMm: 2,
+    tier: 'PAID',
+    isGlobal: true,
+  },
+
+  // PDF Studio Presets (Contextually linked to document page setup, redaction, and archival tools)
+  {
     id: 'P6',
-    codeLabel: 'Preset P6',
+    codeLabel: 'A4 Document',
     studioId: 'S2',
+    applicableToolIds: ['T6', 'T19'],
     category: 'EXPORT_PROFILE',
     name: 'Standard A4 Document Sheet (210 × 297 mm)',
     dimensionsLabel: '210 × 297 mm · Archival PDF',
@@ -523,9 +726,42 @@ export const INITIAL_PRESETS: PresetDefinition[] = [
     isGlobal: true,
   },
   {
+    id: 'P13',
+    codeLabel: 'US Letter',
+    studioId: 'S2',
+    applicableToolIds: ['T6', 'T19'],
+    category: 'SIZE',
+    name: 'US Letter Compliance Sheet (8.5 × 11 in)',
+    dimensionsLabel: '216 × 279 mm · 150 DPI',
+    widthPx: 1275,
+    heightPx: 1650,
+    dpi: 150,
+    bleedMm: 0,
+    tier: 'FREE',
+    isGlobal: true,
+  },
+  {
+    id: 'P14',
+    codeLabel: 'Legal Brief',
+    studioId: 'S2',
+    applicableToolIds: ['T7', 'T20'],
+    category: 'EXPORT_PROFILE',
+    name: 'Redacted Legal Filing Brief (300 DPI Flattened)',
+    dimensionsLabel: '210 × 356 mm · 300 DPI Redaction Ready',
+    widthPx: 1400,
+    heightPx: 2100,
+    dpi: 300,
+    bleedMm: 0,
+    tier: 'PAID',
+    isGlobal: true,
+  },
+
+  // Print & Publication Studio Presets (Contextually linked to composer, bleed, SVG proof, and imposition tools)
+  {
     id: 'P7',
-    codeLabel: 'Preset P7',
+    codeLabel: 'A4 Press Bleed',
     studioId: 'S4',
+    applicableToolIds: ['T15', 'T16'],
     category: 'TEMPLATE',
     name: 'A4 Publication Layout with 3mm Press Bleed',
     dimensionsLabel: '216 × 303 mm · 300 DPI + Crop Marks',
@@ -538,8 +774,9 @@ export const INITIAL_PRESETS: PresetDefinition[] = [
   },
   {
     id: 'P8',
-    codeLabel: 'Preset P8',
+    codeLabel: 'Broadsheet Grid',
     studioId: 'S4',
+    applicableToolIds: ['T13'],
     category: 'TEMPLATE',
     name: 'Two-Column Notice & Specification Broadsheet',
     dimensionsLabel: '1200 × 800 px · Editorial Grid',
@@ -548,6 +785,36 @@ export const INITIAL_PRESETS: PresetDefinition[] = [
     dpi: 150,
     bleedMm: 0,
     tier: 'FREE',
+    isGlobal: true,
+  },
+  {
+    id: 'P15',
+    codeLabel: 'Business Card',
+    studioId: 'S4',
+    applicableToolIds: ['T13'],
+    category: 'SIZE',
+    name: 'Standard Business & Membership Card (90 × 55 mm)',
+    dimensionsLabel: '90 × 55 mm · 300 DPI',
+    widthPx: 1063,
+    heightPx: 650,
+    dpi: 300,
+    bleedMm: 0,
+    tier: 'FREE',
+    isGlobal: true,
+  },
+  {
+    id: 'P16',
+    codeLabel: 'Certificate',
+    studioId: 'S4',
+    applicableToolIds: ['T15', 'T24'],
+    category: 'EXPORT_PROFILE',
+    name: 'Press-Ready Certificate with 5mm Bleed & Trim Marks',
+    dimensionsLabel: '297 × 210 mm · 600 DPI Vector/Print',
+    widthPx: 1800,
+    heightPx: 1270,
+    dpi: 600,
+    bleedMm: 5,
+    tier: 'PAID',
     isGlobal: true,
   },
 ];
@@ -679,9 +946,12 @@ export function evaluateBundleEntitlement(params: {
   expiresAtIso: string | null;
   graceEndsAtIso: string | null;
   requestedTier: 'FREE' | 'PAID' | 'PREMIUM';
+  plansMap?: Record<PlanId, PlanDefinition>;
   nowIso?: string;
 }): { allowed: boolean; reason: string } {
   const { planId, state, expiresAtIso, graceEndsAtIso, requestedTier } = params;
+  const catalog = params.plansMap || INITIAL_PLANS;
+
   if (requestedTier === 'FREE') {
     return { allowed: true, reason: 'Free tool available in public bundle' };
   }
@@ -701,7 +971,7 @@ export function evaluateBundleEntitlement(params: {
     };
   }
 
-  const plan = INITIAL_PLANS[planId];
+  const plan = catalog[planId];
   if (!plan || !plan.unlocksPaidBundles) {
     return {
       allowed: false,
@@ -744,6 +1014,350 @@ export function evaluateBundleEntitlement(params: {
   }
 
   return { allowed: true, reason: 'Active within 48-hour renewal grace window' };
+}
+
+export type StudioActionType =
+  | 'PREVIEW'
+  | 'SAMPLE_EXPLORE'
+  | 'EXPORT'
+  | 'BATCH_EXPORT'
+  | 'PRINT'
+  | 'SHARE'
+  | string;
+
+export interface PlanProfessionalFeatureAccess {
+  paidToolsAccess: boolean;
+  premiumAutomationAccess: boolean;
+  highDpiPrintAccess: boolean; // 300+ DPI print/press output
+  archival600DpiAccess: boolean; // 600 DPI archival master
+  losslessQualityAccess: boolean; // 95–100% quality
+  batchProcessingAccess: boolean; // 25+ batch file limit
+  vectorSvgAndZipAccess: boolean; // SVG & ZIP archive export
+  multiCopyIdSheetAccess: boolean; // 4-up, 8-up, 16-up ID print sheets
+  permanentRedactionAccess: boolean; // Permanent PDF/ID redaction mask
+  pressBleedAndCropMarksAccess: boolean; // 3mm/5mm print bleed & crop marks
+  customWatermarkStampAccess: boolean; // Batch watermark/stamp label
+}
+
+export interface PlanFeatureAccessFlags {
+  paidTools: boolean;
+  premiumAutomation: boolean;
+  sampleExplorationAllowed: boolean; // Free/Freemium users can check/analyze/explore samples & paid features
+  watermarkSampleOutput: boolean; // True when Free/Freemium users preview/export paid/sample features
+  highDpiPrint: boolean; // 300 DPI vs 72 DPI
+  losslessQuality: boolean; // 100% vs 80%
+  batchProcessing: boolean; // 25+ vs 1
+  vectorSvgAndZip: boolean;
+  multiCopyIdSheet: boolean;
+  permanentRedaction: boolean;
+  pressBleedAndCropMarks: boolean;
+  customWatermarkStamp: boolean;
+  studioProFeaturesUnlocked: boolean;
+}
+
+export interface PlanCapabilityValidationInput {
+  planId: PlanId;
+  studioId?: StudioId;
+  actionType?: StudioActionType;
+  state?: EntitlementState | string;
+  requestedFormat?: ExportFormatCode;
+  requestedQualityPct?: number;
+  requestedDpi?: number;
+  requestedBatchCount?: number;
+  requestedWidthPx?: number;
+  requestedHeightPx?: number;
+  requestedIdSheetCopies?: 1 | 4 | 8 | 16;
+  requestedToolTier?: 'FREE' | 'PAID' | 'PREMIUM';
+  isSelectedToolUnlocked?: boolean;
+  dailyExportsUsed?: number;
+  allowWatermarkedSampleExport?: boolean;
+  plansMap?: Record<PlanId, PlanDefinition>;
+}
+
+export interface PlanCapabilityValidationResult {
+  allowed: boolean;
+  effectivePlanId: PlanId;
+  effectivePlanName: string;
+  studioId: StudioId;
+  actionType: StudioActionType;
+  isPaidTierActive: boolean;
+  tierCategory: 'FREE' | 'PAID' | 'PREMIUM';
+  // Explicit requested configuration keys: dpi (72 vs 300), quality (80 vs 100), batchLimit (1 vs 25), featureAccess
+  dpi: number;
+  quality: number;
+  batchLimit: number;
+  dailyFreeLimit: number;
+  featureAccess: PlanFeatureAccessFlags;
+  // Detailed studio capability constraints
+  maxExportQualityPct: number;
+  maxExportDpi: number;
+  defaultDpi: number;
+  availableDpiOptions: number[];
+  maxResolutionPx: number;
+  batchFileLimit: number;
+  maxBatchAllowed: number;
+  maxIdSheetCopiesAllowed: 1 | 4 | 8 | 16;
+  dailyExportLimit: number;
+  allowedFormats: ExportFormatCode[];
+  professionalFeatures: PlanProfessionalFeatureAccess;
+  requiresUpgradeForPro: boolean;
+  upgradePromptMessage: string;
+  clampedQualityPct: number;
+  clampedDpi: number;
+  clampedWidthPx: number;
+  clampedHeightPx: number;
+  violations: string[];
+  reason: string;
+}
+
+/**
+ * Evaluates a user's plan (`planId`), target studio (`studioId`), and action (`actionType`)
+ * and returns a configuration object specifying constraints for `dpi` (72 vs 300),
+ * `quality` (80 vs 100), `batchLimit` (1 vs 25+), strict 3-files/day free limit, and `featureAccess` boolean flags.
+ * Supports both positional `(planId, studioId, actionType, options?)` and object `({ planId, ... })` signatures.
+ */
+export function validatePlanCapabilities(
+  planIdOrParams: PlanId | PlanCapabilityValidationInput,
+  studioIdArg?: StudioId,
+  actionTypeArg?: StudioActionType,
+  extraOptions?: Partial<PlanCapabilityValidationInput>
+): PlanCapabilityValidationResult {
+  const params: PlanCapabilityValidationInput =
+    typeof planIdOrParams === 'string'
+      ? {
+          planId: planIdOrParams,
+          studioId: studioIdArg ?? 'S1',
+          actionType: actionTypeArg ?? 'EXPORT',
+          ...extraOptions,
+        }
+      : planIdOrParams;
+
+  const catalog = params.plansMap || INITIAL_PLANS;
+  const effectiveState = params.state ?? 'ACTIVE';
+  const studioId: StudioId = params.studioId ?? 'S1';
+  const actionType: StudioActionType = params.actionType ?? 'EXPORT';
+
+  // Only ACTIVE or GRACE states allow paid/premium plans; PENDING, REFUNDED, EXPIRED, or NONE fall back to FREE/NONE
+  const effectivePlanId: PlanId =
+    effectiveState === 'ACTIVE' || effectiveState === 'GRACE'
+      ? params.planId
+      : params.planId === 'NONE' || effectiveState === 'NONE'
+      ? 'NONE'
+      : 'FREE';
+
+  const plan = catalog[effectivePlanId] || catalog.NONE;
+  const isPaidTierActive = Boolean(plan.unlocksPaidBundles);
+  const tierCategory: 'FREE' | 'PAID' | 'PREMIUM' = plan.unlocksPremiumAutomation
+    ? 'PREMIUM'
+    : plan.unlocksPaidBundles
+    ? 'PAID'
+    : 'FREE';
+
+  // Canonical constraints: dpi (72 vs 300), quality (80 vs 100), batchLimit (1 vs 25+)
+  const dpi = isPaidTierActive ? 300 : 72;
+  const quality = isPaidTierActive ? 100 : 80;
+  const batchLimit = isPaidTierActive ? Math.max(25, plan.batchLimit) : 1;
+  const dailyFreeLimit = 3;
+
+  const maxExportQualityPct = plan.maxExportQualityPct;
+  const maxExportDpi = plan.maxExportDpi;
+  const defaultDpi = dpi;
+  const availableDpiOptions = [72, 150, 300, 600].filter((d) => d <= maxExportDpi);
+  const maxResolutionPx = plan.maxResolutionPx;
+  const batchFileLimit = plan.batchLimit;
+  const maxBatchAllowed = plan.batchLimit;
+  const maxIdSheetCopiesAllowed = plan.maxIdSheetCopies;
+  const dailyExportLimit = isPaidTierActive ? plan.dailyExportLimit : dailyFreeLimit;
+  const allowedFormats = plan.allowedFormats;
+
+  const studioProFeaturesUnlocked =
+    studioId === 'S3'
+      ? maxIdSheetCopiesAllowed > 1
+      : studioId === 'S2' || studioId === 'S4' || studioId === 'S1'
+      ? Boolean(plan.unlocksPaidBundles)
+      : false;
+
+  const featureAccess: PlanFeatureAccessFlags = {
+    paidTools: Boolean(plan.unlocksPaidBundles),
+    premiumAutomation: Boolean(plan.unlocksPremiumAutomation),
+    sampleExplorationAllowed: true, // Free & Freemium users can explore/analyze paid features with sample caps
+    watermarkSampleOutput: !isPaidTierActive,
+    highDpiPrint: maxExportDpi >= 300,
+    losslessQuality: maxExportQualityPct >= 95,
+    batchProcessing: batchFileLimit >= 25,
+    vectorSvgAndZip: allowedFormats.includes('SVG') && allowedFormats.includes('ZIP'),
+    multiCopyIdSheet: maxIdSheetCopiesAllowed > 1,
+    permanentRedaction: Boolean(plan.unlocksPaidBundles),
+    pressBleedAndCropMarks: Boolean(plan.unlocksPaidBundles),
+    customWatermarkStamp: Boolean(plan.unlocksPaidBundles),
+    studioProFeaturesUnlocked,
+  };
+
+  const professionalFeatures: PlanProfessionalFeatureAccess = {
+    paidToolsAccess: featureAccess.paidTools,
+    premiumAutomationAccess: featureAccess.premiumAutomation,
+    highDpiPrintAccess: featureAccess.highDpiPrint,
+    archival600DpiAccess: maxExportDpi >= 600,
+    losslessQualityAccess: featureAccess.losslessQuality,
+    batchProcessingAccess: featureAccess.batchProcessing,
+    vectorSvgAndZipAccess: featureAccess.vectorSvgAndZip,
+    multiCopyIdSheetAccess: featureAccess.multiCopyIdSheet,
+    permanentRedactionAccess: featureAccess.permanentRedaction,
+    pressBleedAndCropMarksAccess: featureAccess.pressBleedAndCropMarks,
+    customWatermarkStampAccess: featureAccess.customWatermarkStamp,
+  };
+
+  const reqFormat = params.requestedFormat ?? (allowedFormats[0] || 'PNG');
+  const reqQuality = params.requestedQualityPct ?? maxExportQualityPct;
+  const reqDpi = params.requestedDpi ?? maxExportDpi;
+  const reqBatch = params.requestedBatchCount ?? 1;
+
+  const clampedQualityPct = Math.min(Math.max(reqQuality, 50), maxExportQualityPct);
+  const clampedDpi = Math.min(Math.max(reqDpi, 72), maxExportDpi);
+  const clampedWidthPx = Math.min(
+    Math.max(params.requestedWidthPx ?? 800, 100),
+    maxResolutionPx
+  );
+  const clampedHeightPx = Math.min(
+    Math.max(params.requestedHeightPx ?? 600, 100),
+    maxResolutionPx
+  );
+
+  const violations: string[] = [];
+
+  // 0. Check strict 3-files/day Free limit if dailyExportsUsed is provided
+  if (
+    !isPaidTierActive &&
+    params.dailyExportsUsed !== undefined &&
+    params.dailyExportsUsed >= dailyFreeLimit
+  ) {
+    violations.push(
+      `Daily Free export limit reached (${dailyFreeLimit}/${dailyFreeLimit} files used today). Subscribe to a Paid Plan to unlock unlimited daily exports, 300 DPI print quality, and 25+ batch processing.`
+    );
+  }
+
+  // 1. Check gated tool tier entitlement if specified (unless sample watermarked export is enabled)
+  if (
+    params.requestedToolTier &&
+    params.requestedToolTier !== 'FREE' &&
+    !params.allowWatermarkedSampleExport
+  ) {
+    const toolUnlocked =
+      params.isSelectedToolUnlocked !== undefined
+        ? params.isSelectedToolUnlocked
+        : params.requestedToolTier === 'PREMIUM'
+        ? plan.unlocksPremiumAutomation
+        : plan.unlocksPaidBundles;
+    if (!toolUnlocked) {
+      violations.push(
+        `Selected ${params.requestedToolTier.toLowerCase()} studio tool requires an active ${
+          params.requestedToolTier === 'PREMIUM' ? 'Premium Annual' : 'Paid'
+        } plan.`
+      );
+    }
+  }
+
+  // 2. Check allowed export format
+  if (!allowedFormats.includes(reqFormat)) {
+    violations.push(
+      `${reqFormat} output requires an upgraded plan (${plan.name} supports ${allowedFormats.join(', ')}).`
+    );
+  }
+
+  // 3. Check batch size limit (1 for Free vs 25+ for Paid)
+  if (reqBatch > batchFileLimit) {
+    violations.push(
+      `Batch quantity (${reqBatch}) exceeds the limit (${batchFileLimit}) for ${plan.name}. Upgrade to process 25–100+ files at once.`
+    );
+  }
+
+  // 4. Check export quality percentage cap
+  if (reqQuality > maxExportQualityPct) {
+    violations.push(
+      `${reqQuality}% export quality exceeds the ${maxExportQualityPct}% cap on ${plan.name}. Upgrade for 95%–100% lossless output.`
+    );
+  }
+
+  // 5. Check print density DPI cap (72/150 DPI on Free vs 300/600 DPI on Paid)
+  if (reqDpi > maxExportDpi) {
+    violations.push(
+      `${reqDpi} DPI exceeds the ${maxExportDpi} DPI cap on ${plan.name}. Upgrade for 300–600 DPI press output.`
+    );
+  }
+
+  // 6. Check canvas resolution cap (width / height)
+  if (
+    (params.requestedWidthPx !== undefined && params.requestedWidthPx > maxResolutionPx) ||
+    (params.requestedHeightPx !== undefined && params.requestedHeightPx > maxResolutionPx)
+  ) {
+    violations.push(
+      `Canvas dimensions (${params.requestedWidthPx ?? clampedWidthPx}×${
+        params.requestedHeightPx ?? clampedHeightPx
+      } px) exceed the ${maxResolutionPx}px resolution cap on ${plan.name}.`
+    );
+  }
+
+  // 7. Check multi-copy ID sheet layout cap (unless exploring watermarked sample)
+  if (
+    params.requestedIdSheetCopies !== undefined &&
+    params.requestedIdSheetCopies > maxIdSheetCopiesAllowed &&
+    !params.allowWatermarkedSampleExport
+  ) {
+    violations.push(
+      `${params.requestedIdSheetCopies}-up ID print sheet exceeds the ${maxIdSheetCopiesAllowed}-up limit on ${plan.name}.`
+    );
+  }
+
+  const allowed = violations.length === 0;
+  const upgradePromptMessage = isPaidTierActive
+    ? `${plan.name} active: 300+ DPI, ${maxExportQualityPct}% quality, and up to ${batchFileLimit} batch files unlocked.`
+    : `You are on ${plan.name} (capped at ${quality}% sample quality, ${dpi} DPI, ${batchLimit} file batch limit, and strictly ${dailyFreeLimit} free files/day). Subscribe to a Paid Plan for unwatermarked 300–600 DPI masters, 100% lossless quality, and 25+ batch processing.`;
+
+  return {
+    allowed,
+    effectivePlanId,
+    effectivePlanName: plan.name,
+    studioId,
+    actionType,
+    isPaidTierActive,
+    tierCategory,
+    dpi,
+    quality,
+    batchLimit,
+    dailyFreeLimit,
+    featureAccess,
+    maxExportQualityPct,
+    maxExportDpi,
+    defaultDpi,
+    availableDpiOptions,
+    maxResolutionPx,
+    batchFileLimit,
+    maxBatchAllowed,
+    maxIdSheetCopiesAllowed,
+    dailyExportLimit,
+    allowedFormats,
+    professionalFeatures,
+    requiresUpgradeForPro: !isPaidTierActive,
+    upgradePromptMessage,
+    clampedQualityPct,
+    clampedDpi,
+    clampedWidthPx,
+    clampedHeightPx,
+    violations,
+    reason: allowed
+      ? `Output verified within ${plan.name} quality & quantity caps.`
+      : violations[0],
+  };
+}
+
+/**
+ * Evaluates whether a requested export format, quality %, DPI, resolution, and batch quantity
+ * are permitted under the user's effective active plan (delegates to validatePlanCapabilities).
+ */
+export function evaluateOutputCapEntitlement(
+  params: PlanCapabilityValidationInput
+): PlanCapabilityValidationResult {
+  return validatePlanCapabilities(params);
 }
 
 /**
@@ -796,8 +1410,102 @@ export const ADMIN_PORTAL_SLUGS: Record<Exclude<AdminCategory, 'USER'>, string> 
   SECURITY_AUDIT: 'security-audit-v9',
   INTEGRATIONS_VAULT: 'integrations-vault-v9',
   OFFERS_PRICING: 'offers-pricing-v9',
+  DEVELOPER: 'developer-architect-v9',
+  QA_TESTER: 'qa-tester-sandbox-v9',
   SUPER_USER: 'super-authority-v9',
 };
+
+export interface SchemaRoleMetadata {
+  roleCategory: AdminCategory;
+  schemaRoleId: string;
+  title: string;
+  personaGroup: 'USER' | 'SUBSCRIBER' | 'ADMIN' | 'DEVELOPER' | 'TESTER';
+  defaultIdentifier: string;
+  scopeSummary: string;
+}
+
+export const UNIFIED_SCHEMA_ROLES: SchemaRoleMetadata[] = [
+  {
+    roleCategory: 'SUPER_USER',
+    schemaRoleId: 'ROLE-V24-SUPER-01',
+    title: 'Owner / Super Admin',
+    personaGroup: 'ADMIN',
+    defaultIdentifier: 'super.admin@varnank.studio',
+    scopeSummary: 'All 8 Admin Modules, 2-Person Recovery Final Approval, Vault & Kill Switch',
+  },
+  {
+    roleCategory: 'OFFERS_PRICING',
+    schemaRoleId: 'ROLE-V24-PRICE-02',
+    title: 'Offers, Pricing & Output Caps Admin',
+    personaGroup: 'ADMIN',
+    defaultIdentifier: 'pricing.admin@varnank.studio',
+    scopeSummary: 'Modify Plan Prices, Free/Paid Output Caps (DPI/Quality/Batch), & Promotional Offers',
+  },
+  {
+    roleCategory: 'TOOLS_STUDIOS',
+    schemaRoleId: 'ROLE-V24-TOOLS-03',
+    title: 'Tools & Studios Admin',
+    personaGroup: 'ADMIN',
+    defaultIdentifier: 'studios.admin@varnank.studio',
+    scopeSummary: 'Configure 24 Studio Tools, Free/Paid/Premium Tiers & Tool Availability',
+  },
+  {
+    roleCategory: 'CONTENT_PRESETS',
+    schemaRoleId: 'ROLE-V24-PRESET-04',
+    title: 'Content & Global Presets Admin',
+    personaGroup: 'ADMIN',
+    defaultIdentifier: 'presets.admin@varnank.studio',
+    scopeSummary: 'Create & Modify Contextual Tool Sizes, Print Templates & Free/Paid Preset Tiers',
+  },
+  {
+    roleCategory: 'FINANCE',
+    schemaRoleId: 'ROLE-V24-FIN-05',
+    title: 'Finance, Orders & Tax Ledger Admin',
+    personaGroup: 'ADMIN',
+    defaultIdentifier: 'finance.admin@varnank.studio',
+    scopeSummary: 'Inspect Orders, GST/Tax Ledger & Issue Refunds with Immediate Revocation',
+  },
+  {
+    roleCategory: 'SUPPORT',
+    schemaRoleId: 'ROLE-V24-SUPP-06',
+    title: 'Support & Step-1 Recovery Admin',
+    personaGroup: 'ADMIN',
+    defaultIdentifier: 'support.admin@varnank.studio',
+    scopeSummary: 'Manage User Support Tickets & Verify Step-1 Two-Person Recovery Checklist',
+  },
+  {
+    roleCategory: 'SECURITY_AUDIT',
+    schemaRoleId: 'ROLE-V24-SEC-07',
+    title: 'Security, Audit & DPDP Compliance Admin',
+    personaGroup: 'ADMIN',
+    defaultIdentifier: 'audit.admin@varnank.studio',
+    scopeSummary: 'Verify SHA-256 Hash-Chained Audit Logs, Error Registry & Cloudflare Quotas',
+  },
+  {
+    roleCategory: 'INTEGRATIONS_VAULT',
+    schemaRoleId: 'ROLE-V24-VAULT-08',
+    title: 'Integrations & Secrets Vault Admin',
+    personaGroup: 'ADMIN',
+    defaultIdentifier: 'vault.admin@varnank.studio',
+    scopeSummary: 'Rotate & Toggle Write-Only AES-256-GCM Payment, OAuth & OTP Provider Keys',
+  },
+  {
+    roleCategory: 'DEVELOPER',
+    schemaRoleId: 'ROLE-V24-DEV-09',
+    title: 'Web Developer & Webhook Schema Architect',
+    personaGroup: 'DEVELOPER',
+    defaultIdentifier: 'developer@varnank.studio',
+    scopeSummary: 'Inspect Webhooks, Studio Tools, Vault Adapters, Audit Logs & Schema v2.4 Diagnostics',
+  },
+  {
+    roleCategory: 'QA_TESTER',
+    schemaRoleId: 'ROLE-V24-TST-10',
+    title: 'QA Verification & Entitlement Tester',
+    personaGroup: 'TESTER',
+    defaultIdentifier: 'tester@varnank.studio',
+    scopeSummary: 'Verify Studio Tools, Presets, Plans, User Quotas & End-to-End Entitlement Flows',
+  },
+];
 
 export type AdminPermissionAction =
   | 'VIEW_FINANCE_ORDERS'
@@ -812,18 +1520,43 @@ export type AdminPermissionAction =
   | 'MANAGE_SECRETS_VAULT'
   | 'MANAGE_OFFERS_PRICING'
   | 'MANAGE_COUNTRY_CURRENCY'
+  | 'MANAGE_USERS_SUBSCRIBERS'
   | 'GRANT_ADMIN_ROLES'
   | 'TRIGGER_KILL_SWITCH';
 
 const ROLE_PERMISSIONS: Record<AdminCategory, AdminPermissionAction[]> = {
   USER: [],
-  FINANCE: ['VIEW_FINANCE_ORDERS', 'ISSUE_REFUND'],
-  SUPPORT: ['MANAGE_SUPPORT_TICKETS', 'VERIFY_RECOVERY_CHECKLIST', 'LOOKUP_ERROR_REF'],
+  FINANCE: ['VIEW_FINANCE_ORDERS', 'ISSUE_REFUND', 'MANAGE_USERS_SUBSCRIBERS'],
+  SUPPORT: [
+    'MANAGE_SUPPORT_TICKETS',
+    'VERIFY_RECOVERY_CHECKLIST',
+    'LOOKUP_ERROR_REF',
+    'MANAGE_USERS_SUBSCRIBERS',
+  ],
   CONTENT_PRESETS: ['MANAGE_PRESETS_CONTENT'],
   TOOLS_STUDIOS: ['MANAGE_STUDIOS_LIMITS'],
   SECURITY_AUDIT: ['VIEW_AUDIT_LOGS', 'LOOKUP_ERROR_REF'],
   INTEGRATIONS_VAULT: ['MANAGE_SECRETS_VAULT'],
-  OFFERS_PRICING: ['MANAGE_OFFERS_PRICING', 'MANAGE_COUNTRY_CURRENCY'],
+  OFFERS_PRICING: [
+    'MANAGE_OFFERS_PRICING',
+    'MANAGE_COUNTRY_CURRENCY',
+    'MANAGE_USERS_SUBSCRIBERS',
+  ],
+  DEVELOPER: [
+    'MANAGE_STUDIOS_LIMITS',
+    'MANAGE_PRESETS_CONTENT',
+    'VIEW_AUDIT_LOGS',
+    'LOOKUP_ERROR_REF',
+    'MANAGE_SECRETS_VAULT',
+    'MANAGE_USERS_SUBSCRIBERS',
+  ],
+  QA_TESTER: [
+    'MANAGE_STUDIOS_LIMITS',
+    'MANAGE_PRESETS_CONTENT',
+    'VIEW_AUDIT_LOGS',
+    'LOOKUP_ERROR_REF',
+    'MANAGE_USERS_SUBSCRIBERS',
+  ],
   SUPER_USER: [
     'VIEW_FINANCE_ORDERS',
     'ISSUE_REFUND',
@@ -837,6 +1570,7 @@ const ROLE_PERMISSIONS: Record<AdminCategory, AdminPermissionAction[]> = {
     'MANAGE_SECRETS_VAULT',
     'MANAGE_OFFERS_PRICING',
     'MANAGE_COUNTRY_CURRENCY',
+    'MANAGE_USERS_SUBSCRIBERS',
     'GRANT_ADMIN_ROLES',
     'TRIGGER_KILL_SWITCH',
   ],

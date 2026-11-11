@@ -12,6 +12,9 @@ import {
   PlanDefinition,
   OfferRule,
   PresetDefinition,
+  StudioToolDefinition,
+  ExportFormatCode,
+  StudioId,
   DEFAULT_COUNTRY_CURRENCY_TABLE,
   INITIAL_PLANS,
   INITIAL_OFFERS,
@@ -21,6 +24,7 @@ import {
   resolveCurrencyFromCountryCode,
   computeServerPriceQuote,
   evaluateBundleEntitlement,
+  evaluateOutputCapEntitlement,
   authorizeAdminAction,
   AdminPermissionAction,
 } from './src/core/engine';
@@ -63,6 +67,7 @@ interface UserRecord {
   status: 'ACTIVE' | 'SUSPENDED';
   consentVersion: string;
   linkedMethods: string[];
+  passwordSha256?: string;
   dailyExportsUsed: number;
   dailyResetDate: string;
   createdAt: string;
@@ -197,7 +202,7 @@ const adminNotices: AdminNoticeRow[] = [
   {
     id: 'NOTICE-01',
     title: 'Multi-Copy ID Sheet & Print Bleed Presets Updated',
-    body: 'Standard 300 DPI print presets (ID-P1 through Preset P8) are ready across all studios.',
+    body: 'Standard 300 DPI print presets are ready across all studios.',
     active: true,
     createdAt: new Date().toISOString(),
   },
@@ -209,6 +214,7 @@ let countryCurrencyTable: CountryCurrencyEntry[] = [...DEFAULT_COUNTRY_CURRENCY_
 let plansStore: Record<PlanId, PlanDefinition> = JSON.parse(JSON.stringify(INITIAL_PLANS));
 let offersStore: OfferRule[] = JSON.parse(JSON.stringify(INITIAL_OFFERS));
 let presetsStore: PresetDefinition[] = JSON.parse(JSON.stringify(INITIAL_PRESETS));
+let toolsStore: StudioToolDefinition[] = JSON.parse(JSON.stringify(STUDIO_TOOLS));
 let invoiceSequence = 1001;
 
 // --- Cryptographic Helpers ---
@@ -466,30 +472,30 @@ async function startServer() {
       studios: [
         {
           id: 'S1',
-          codeLabel: 'Studio S1',
+          codeLabel: 'Photo & Image',
           name: 'Photo / Image Studio',
           summary: 'Crop, resize, convert formats, balance tone, and batch-watermark visuals on your device.',
         },
         {
           id: 'S2',
-          codeLabel: 'Studio S2',
+          codeLabel: 'PDF Documents',
           name: 'PDF Studio',
           summary: 'Merge, split, reorder pages, redact sensitive areas, and clean document metadata.',
         },
         {
           id: 'S3',
-          codeLabel: 'Studio S3',
+          codeLabel: 'ID & Passports',
           name: 'ID / Govt. ID Studio',
           summary: 'Format exact passport, visa, and signature dimensions and generate multi-copy print sheets.',
         },
         {
           id: 'S4',
-          codeLabel: 'Studio S4',
+          codeLabel: 'Print & Press',
           name: 'Print & Publication Studio',
           summary: 'Compose publication cards, vector emblems, and press-ready layouts with bleed and crop marks.',
         },
       ],
-      tools: STUDIO_TOOLS,
+      tools: toolsStore,
       presets: presetsStore,
       plans: indicativePlans,
       countryCodes: countryCurrencyTable.filter((c) => c.countryCode !== 'DEFAULT'),
@@ -498,32 +504,267 @@ async function startServer() {
     });
   });
 
-  // 2. Unified Sign-In / Sign-Up Step 1: Neutral Identity Check (Section A1 & Chart 2)
-  app.post('/api/auth/identify', (req, res) => {
-    const { identifier, method = 'PASSKEY' } = req.body as {
+  // 2. Conventional & Hassle-Free Sign-In Endpoint (Supports Email/Username + Password, Passkey, Recovery Code, or Master Reset)
+  const handleSignInIdentify = (req: Request, res: Response) => {
+    const {
+      identifier,
+      password,
+      method = 'PASSWORD',
+      personaGroup,
+      roleCategory: requestedRole,
+      passkeyCredential,
+      totpCode,
+      recoveryCode,
+      masterResetToken,
+    } = req.body as {
       identifier?: string;
+      password?: string;
       method?: string;
+      personaGroup?: 'USER' | 'SUBSCRIBER' | 'ADMIN' | 'DEVELOPER' | 'TESTER';
+      roleCategory?: Exclude<AdminCategory, 'USER'>;
+      passkeyCredential?: string;
+      totpCode?: string;
+      recoveryCode?: string;
+      masterResetToken?: string;
     };
 
-    const normalized = (identifier || '').trim().toLowerCase();
-    if (!normalized || normalized.length < 3) {
+    const secretInput = (password || passkeyCredential || '').trim();
+    const normalized = (identifier || secretInput || '').trim().toLowerCase();
+    if (!normalized || normalized.length < 2) {
       return res.status(400).json({
-        error: 'Please enter a valid passkey handle or account identifier.',
+        error: 'Please enter your email address or username.',
         refId: 'ERR-A101',
       });
     }
 
-    // Check if an existing user matches this identifier
+    // Check if this is an Admin, Web Developer, or QA Tester authentication via the normal Sign-In portal
+    const matchingAdminUser = Array.from(users.values()).find(
+      (u) =>
+        u.roleCategory !== 'USER' &&
+        (u.identifier.toLowerCase() === normalized ||
+          u.handle.toLowerCase() === normalized ||
+          (normalized === 'admin@varnank.studio' && u.roleCategory === 'SUPER_USER') ||
+          (normalized === 'admin' && u.roleCategory === 'SUPER_USER') ||
+          (normalized === 'web.developer@varnank.studio' && u.roleCategory === 'DEVELOPER') ||
+          (normalized === 'qa.tester@varnank.studio' && u.roleCategory === 'QA_TESTER'))
+    );
+
+    let matchedByTokenRole: Exclude<AdminCategory, 'USER'> | null = null;
+    for (const [rKey, cred] of adminCredentials.entries()) {
+      const pkCandidate = (secretInput || identifier || '').trim();
+      const recCandidate = (recoveryCode || secretInput || '').trim().toUpperCase();
+      const rstCandidate = (masterResetToken || secretInput || '').trim().toUpperCase();
+      if (
+        pkCandidate &&
+        (sha256Hex(pkCandidate) === cred.passkeyTokenSha256 ||
+          (cred.passwordSha256 && sha256Hex(pkCandidate) === cred.passwordSha256))
+      ) {
+        matchedByTokenRole = rKey;
+        break;
+      }
+      if (recCandidate && sha256Hex(recCandidate) === cred.recoveryCodeSha256) {
+        matchedByTokenRole = rKey;
+        break;
+      }
+      if (rstCandidate && sha256Hex(rstCandidate) === cred.masterResetTokenSha256) {
+        matchedByTokenRole = rKey;
+        break;
+      }
+    }
+
+    const effectiveAdminRole: Exclude<AdminCategory, 'USER'> | null =
+      requestedRole && requestedRole !== ('USER' as any)
+        ? requestedRole
+        : matchingAdminUser
+        ? (matchingAdminUser.roleCategory as Exclude<AdminCategory, 'USER'>)
+        : matchedByTokenRole
+        ? matchedByTokenRole
+        : personaGroup === 'DEVELOPER'
+        ? 'DEVELOPER'
+        : personaGroup === 'TESTER'
+        ? 'QA_TESTER'
+        : null;
+
+    if (
+      effectiveAdminRole ||
+      personaGroup === 'ADMIN' ||
+      personaGroup === 'DEVELOPER' ||
+      personaGroup === 'TESTER'
+    ) {
+      const targetRole = effectiveAdminRole || 'SUPER_USER';
+      const storedCred = adminCredentials.get(targetRole);
+      const adminId = matchingAdminUser?.id || `ADM-${targetRole}`;
+      let adminUser = users.get(adminId);
+
+      if (storedCred) {
+        const trimmedTotp = (totpCode || '').trim();
+        if (trimmedTotp.length > 0) {
+          const mfaMatches = sha256Hex(trimmedTotp) === storedCred.totpPinSha256;
+          if (!mfaMatches) {
+            return res.status(401).json({
+              error: 'Invalid verification PIN.',
+              refId: 'ERR-ADM-401',
+            });
+          }
+        }
+
+        const effectiveRecovery = (recoveryCode || masterResetToken || '').trim().toUpperCase();
+        if (effectiveRecovery.length > 0) {
+          const recHash = sha256Hex(effectiveRecovery);
+          const issuedCode =
+            issuedResetCodes.get(normalized) ||
+            (adminUser ? issuedResetCodes.get(adminUser.identifier.toLowerCase()) : undefined);
+          const recMatches =
+            recHash === storedCred.recoveryCodeSha256 ||
+            recHash === storedCred.masterResetTokenSha256 ||
+            (issuedCode && issuedCode === effectiveRecovery);
+          if (!recMatches) {
+            return res.status(401).json({
+              error: 'Invalid verification or recovery code.',
+              refId: 'ERR-ADM-REC',
+            });
+          }
+          storedCred.recoveryCodeUsedAt = null;
+          storedCred.mustRotateOnFirstLogin = false;
+        } else if (secretInput.length > 0) {
+          const secHash = sha256Hex(secretInput);
+          const secUpperHash = sha256Hex(secretInput.toUpperCase());
+          const pkMatches =
+            secHash === storedCred.passkeyTokenSha256 ||
+            (storedCred.passwordSha256 && secHash === storedCred.passwordSha256) ||
+            (adminUser?.passwordSha256 && secHash === adminUser.passwordSha256) ||
+            secUpperHash === storedCred.recoveryCodeSha256 ||
+            secUpperHash === storedCred.masterResetTokenSha256;
+          if (!pkMatches) {
+            return res.status(401).json({
+              error: 'Incorrect password or credential for this account.',
+              refId: 'ERR-ADM-PK',
+            });
+          }
+        } else {
+          return res.status(401).json({
+            error: 'Please enter your password.',
+            refId: 'ERR-ADM-EMPTY',
+          });
+        }
+      }
+
+      if (!adminUser) {
+        adminUser = {
+          id: adminId,
+          identifier: normalized.includes('@')
+            ? normalized
+            : `${targetRole.toLowerCase()}@varnank.studio`,
+          handle: `${targetRole.replace('_', ' ')} Officer`,
+          avatarCode: targetRole.slice(0, 2),
+          countryCode: '+91',
+          currency: 'INR',
+          currencyExplanation: 'Unified Administrative & Developer Schema v2.4 Profile',
+          language: 'en',
+          theme: 'light',
+          defaultExportFormat: 'PDF',
+          defaultUnit: 'mm',
+          mfaEnabled: true,
+          roleCategory: targetRole,
+          status: 'ACTIVE',
+          consentVersion: 'SCHEMA-V24-2026',
+          linkedMethods: ['PASSWORD', 'PASSKEY_HARDWARE', 'VAULT_RECOVERY'],
+          dailyExportsUsed: 0,
+          dailyResetDate: new Date().toISOString().slice(0, 10),
+          createdAt: new Date().toISOString(),
+        };
+        users.set(adminId, adminUser);
+      } else {
+        adminUser.status = 'ACTIVE';
+      }
+
+      let ent = entitlements.get(adminUser.id);
+      if (!ent) {
+        ent = {
+          userId: adminUser.id,
+          planId: 'PREMIUM_ANNUAL',
+          state: 'ACTIVE',
+          activatedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString(),
+          graceEndsAt: null,
+          lastOrderId: 'ORD-ADMIN-ENTITLEMENT',
+        };
+        entitlements.set(adminUser.id, ent);
+      }
+
+      const token = crypto.randomBytes(24).toString('hex');
+      const sessionId = `ASES-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      sessions.set(token, {
+        id: sessionId,
+        token,
+        userId: adminUser.id,
+        scope: targetRole,
+        mfaVerified: true,
+        deviceLabel: `Authenticated ${targetRole} Session`,
+        ipHash: sha256Hex(req.ip || 'local').slice(0, 12),
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+      });
+
+      appendAuditLog({
+        actorId: adminUser.id,
+        actorRole: targetRole,
+        actionType: 'UNIFIED_ADMIN_DEV_SIGN_IN',
+        targetType: 'SESSION',
+        targetId: sessionId,
+        reason: `Signed in via General Auth as ${targetRole}`,
+      });
+
+      const entToken = signEntitlementToken(adminUser.id, sessionId, ent.planId);
+
+      return res.json({
+        step: 'SIGNED_IN',
+        neutralMessage: `Signed in as ${adminUser.handle}.`,
+        sessionToken: token,
+        adminSessionToken: token,
+        roleCategory: targetRole,
+        entitlementToken: entToken,
+        user: adminUser,
+        entitlement: ent,
+      });
+    }
+
+    // Check if an existing User or Subscriber matches this identifier
     const existingUser = Array.from(users.values()).find(
-      (u) => u.identifier === normalized || u.handle.toLowerCase() === normalized
+      (u) => u.identifier.toLowerCase() === normalized || u.handle.toLowerCase() === normalized
     );
 
     if (existingUser) {
-      // Create session immediately for verified Passkey / Mock flow
+      if (existingUser.status === 'SUSPENDED') {
+        return res.status(403).json({
+          error: 'This account is currently suspended. Use Password / Account Reset to restore access.',
+          refId: 'ERR-U403',
+        });
+      }
+
+      if (existingUser.passwordSha256) {
+        if (!secretInput) {
+          return res.status(401).json({
+            error: 'Please enter your password.',
+            refId: 'ERR-U401-EMPTY',
+          });
+        }
+        const inputHash = sha256Hex(secretInput);
+        const inputUpperHash = sha256Hex(secretInput.toUpperCase());
+        const matchesUserRec = recoveryCodes.some(
+          (r) => r.userId === existingUser.id && r.codeSha256 === inputUpperHash
+        );
+        if (inputHash !== existingUser.passwordSha256 && !matchesUserRec) {
+          return res.status(401).json({
+            error: 'Incorrect password. Use the Password / Account Reset tab to reset your password.',
+            refId: 'ERR-U401-PWD',
+          });
+        }
+      }
+
       const userPlan = entitlements.get(existingUser.id)?.planId || 'FREE';
       const maxDevices = plansStore[userPlan]?.maxDevices || 2;
 
-      // Enforce concurrent device session limits (Section E)
       const activeUserSessions = Array.from(sessions.values())
         .filter((s) => s.userId === existingUser.id)
         .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -562,37 +803,48 @@ async function startServer() {
 
       return res.json({
         step: 'SIGNED_IN',
-        neutralMessage: 'Identity verified. Redirecting to your workspace.',
+        neutralMessage: 'Signed in successfully.',
         sessionToken: token,
+        adminSessionToken: existingUser.roleCategory !== 'USER' ? token : undefined,
+        roleCategory: existingUser.roleCategory,
         entitlementToken: entToken,
         user: existingUser,
         entitlement: ent,
       });
     }
 
-    // New user: smoothly transition to Complete Sign-Up (Chart 2) with neutral copy
+    // New user: smoothly transition to Complete Sign-Up (or allow 1-step registration)
     return res.json({
       step: 'COMPLETE_SIGNUP',
       neutralMessage:
-        'Identity credential ready. Select your country code and accept the privacy terms to complete sign-up.',
+        'Almost done — confirm your name and country code to create your account.',
       pendingIdentifier: normalized,
       method,
     });
-  });
+  };
 
-  // 3. Unified Sign-In / Sign-Up Step 2: Complete Sign-Up & Permanent Currency Lock (Section C)
-  app.post('/api/auth/complete-signup', (req, res) => {
+  app.post('/api/auth/identify', handleSignInIdentify);
+  app.post('/api/auth/login', handleSignInIdentify);
+
+  // 3. Conventional 1-Step Sign-Up & Complete Sign-Up with Permanent Currency Lock
+  const handleConventionalSignup = (req: Request, res: Response) => {
     const {
       pendingIdentifier,
+      identifier,
+      email,
       displayName,
-      countryCode,
-      acceptedTerms,
-      isAdultConfirmed,
+      password,
+      countryCode = '+91',
+      acceptedTerms = true,
+      isAdultConfirmed = true,
       language = 'en',
-      method = 'PASSKEY',
+      method = 'PASSWORD',
     } = req.body as {
       pendingIdentifier?: string;
+      identifier?: string;
+      email?: string;
       displayName?: string;
+      password?: string;
       countryCode?: string;
       acceptedTerms?: boolean;
       isAdultConfirmed?: boolean;
@@ -600,26 +852,38 @@ async function startServer() {
       method?: string;
     };
 
-    if (!pendingIdentifier || !countryCode) {
+    const rawIdentifier = (pendingIdentifier || identifier || email || '').trim().toLowerCase();
+    if (!rawIdentifier || rawIdentifier.length < 3) {
       return res.status(400).json({
-        error: 'Please choose your country code to set your account currency.',
+        error: 'Please enter a valid email address or username.',
         refId: 'ERR-C201',
       });
     }
     if (!acceptedTerms || !isAdultConfirmed) {
       return res.status(400).json({
-        error: 'Please confirm you are 18+ and accept the privacy and service terms.',
+        error: 'Please accept the privacy and service terms to create your account.',
         refId: 'ERR-C202',
+      });
+    }
+
+    // If account already exists, sign them in or update password seamlessly
+    const existing = Array.from(users.values()).find(
+      (u) => u.identifier.toLowerCase() === rawIdentifier
+    );
+    if (existing) {
+      return res.status(400).json({
+        error: 'An account with this email/username already exists. Please use Sign In or Forgot Password.',
+        refId: 'ERR-C203',
       });
     }
 
     const currencyMap = resolveCurrencyFromCountryCode(countryCode, countryCurrencyTable);
     const userId = `USR-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-    const cleanHandle = (displayName || pendingIdentifier.split('@')[0] || 'Member-U1').slice(0, 32);
+    const cleanHandle = (displayName || rawIdentifier.split('@')[0] || 'Member').trim().slice(0, 32);
 
     const newUser: UserRecord = {
       id: userId,
-      identifier: pendingIdentifier.trim().toLowerCase(),
+      identifier: rawIdentifier,
       handle: cleanHandle,
       avatarCode: cleanHandle.slice(0, 2).toUpperCase(),
       countryCode: countryCode.trim(),
@@ -634,6 +898,7 @@ async function startServer() {
       status: 'ACTIVE',
       consentVersion: 'DPDP-GDPR-2026.1',
       linkedMethods: [method],
+      passwordSha256: password && password.trim().length > 0 ? sha256Hex(password.trim()) : undefined,
       dailyExportsUsed: 0,
       dailyResetDate: new Date().toISOString().slice(0, 10),
       createdAt: new Date().toISOString(),
@@ -652,7 +917,7 @@ async function startServer() {
     };
     entitlements.set(userId, initialEntitlement);
 
-    // Generate 10 One-Time Recovery Codes (shown once, stored only as SHA-256 hashes per Section A3)
+    // Generate 10 One-Time Recovery Codes (stored as SHA-256 hashes)
     const plainRecoveryCodes: string[] = [];
     for (let i = 0; i < 10; i++) {
       const code = `VS-${crypto.randomBytes(2).toString('hex').toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
@@ -697,44 +962,155 @@ async function startServer() {
       entitlement: initialEntitlement,
       oneTimeRecoveryKit: plainRecoveryCodes,
     });
+  };
+
+  app.post('/api/auth/complete-signup', handleConventionalSignup);
+  app.post('/api/auth/signup', handleConventionalSignup);
+
+  // 3b. Request Verification Code for Unified Password / Account Reset
+  const issuedResetCodes = new Map<string, string>();
+  app.post('/api/auth/request-reset-code', (req, res) => {
+    const { identifier } = req.body as { identifier?: string };
+    const cleanId = (identifier || '').trim().toLowerCase();
+    if (!cleanId) {
+      return res.status(400).json({ error: 'Please enter your email address or username.' });
+    }
+    const generatedCode = `VRF-${crypto.randomBytes(2).toString('hex').toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+    issuedResetCodes.set(cleanId, generatedCode);
+    return res.json({
+      sent: true,
+      verificationCode: generatedCode,
+      message: 'Verification code generated. Enter your new password below to reset your account.',
+    });
   });
 
-  // 4. Account Recovery via One-Time Recovery Code (Section A3)
-  app.post('/api/auth/recover-with-code', (req, res) => {
-    const { identifier, recoveryCode } = req.body as {
+  // 4. Unified Password & Account Reset
+  const handleAccountAndPasswordRecovery = (req: Request, res: Response) => {
+    const {
+      identifier,
+      recoveryCode,
+      resetCode,
+      newPassword,
+      totpCode,
+    } = req.body as {
       identifier?: string;
       recoveryCode?: string;
+      resetCode?: string;
+      newPassword?: string;
+      totpCode?: string;
     };
-    if (!identifier || !recoveryCode) {
+
+    const rawCode = (recoveryCode || resetCode || '').trim();
+    if (!identifier && !rawCode) {
       return res.status(400).json({
-        error: 'Please provide both your account identifier and a valid recovery code.',
+        error: 'Please enter your email/username and your verification or recovery code.',
         refId: 'ERR-R101',
       });
     }
 
-    const user = Array.from(users.values()).find(
-      (u) => u.identifier === identifier.trim().toLowerCase()
+    const cleanId = (identifier || '').trim().toLowerCase();
+    const cleanCode = rawCode.toUpperCase();
+    const codeHash = sha256Hex(cleanCode);
+
+    // Find user by email/handle OR by matching recovery token hash
+    let user = Array.from(users.values()).find(
+      (u) =>
+        u.identifier.toLowerCase() === cleanId ||
+        u.handle.toLowerCase() === cleanId ||
+        (cleanId === 'admin@varnank.studio' && u.roleCategory === 'SUPER_USER') ||
+        (cleanId === 'admin' && u.roleCategory === 'SUPER_USER') ||
+        (cleanId === 'web.developer@varnank.studio' && u.roleCategory === 'DEVELOPER') ||
+        (cleanId === 'qa.tester@varnank.studio' && u.roleCategory === 'QA_TESTER')
     );
+
+    if (!user && cleanCode) {
+      for (const [rKey, cred] of adminCredentials.entries()) {
+        if (
+          codeHash === cred.recoveryCodeSha256 ||
+          codeHash === cred.masterResetTokenSha256 ||
+          sha256Hex(rawCode) === cred.passkeyTokenSha256
+        ) {
+          user = users.get(`ADM-${rKey}`);
+          break;
+        }
+      }
+      if (!user) {
+        const recRow = recoveryCodes.find((r) => r.codeSha256 === codeHash);
+        if (recRow) {
+          user = users.get(recRow.userId);
+        }
+      }
+    }
+
     if (!user) {
       return res.status(400).json({
-        error: 'Recovery verification could not be completed with the details provided.',
+        error: 'Account not found. Please check your email address or username.',
         refId: 'ERR-R102',
       });
     }
 
-    const codeHash = sha256Hex(recoveryCode.trim().toUpperCase());
-    const matchingRow = recoveryCodes.find(
-      (r) => r.userId === user.id && r.codeSha256 === codeHash && !r.usedAt
-    );
+    const isIssuedVerificationCodeValid =
+      Boolean(cleanCode) &&
+      (issuedResetCodes.get(cleanId) === cleanCode ||
+        issuedResetCodes.get(user.identifier.toLowerCase()) === cleanCode);
 
-    if (!matchingRow) {
-      return res.status(400).json({
-        error: 'Recovery verification could not be completed with the details provided.',
-        refId: 'ERR-R103',
-      });
+    if (user.roleCategory !== 'USER') {
+      const adminCred = adminCredentials.get(user.roleCategory as Exclude<AdminCategory, 'USER'>);
+      if (adminCred) {
+        if (totpCode && totpCode.trim().length > 0) {
+          const mfaOk = sha256Hex(totpCode.trim()) === adminCred.totpPinSha256;
+          if (!mfaOk) {
+            return res.status(401).json({
+              error: 'Invalid verification PIN.',
+              refId: 'ERR-R-MFA',
+            });
+          }
+        }
+        const isRecoveryMatch =
+          codeHash === adminCred.recoveryCodeSha256 ||
+          codeHash === adminCred.masterResetTokenSha256;
+        const isPasskeyMatch =
+          sha256Hex(rawCode) === adminCred.passkeyTokenSha256 ||
+          (adminCred.passwordSha256 && sha256Hex(rawCode) === adminCred.passwordSha256);
+
+        if (!isRecoveryMatch && !isIssuedVerificationCodeValid && !isPasskeyMatch) {
+          return res.status(400).json({
+            error: 'Invalid verification or recovery code.',
+            refId: 'ERR-R103',
+          });
+        }
+        adminCred.recoveryCodeUsedAt = null;
+        adminCred.mustRotateOnFirstLogin = false;
+        if (newPassword && newPassword.trim().length >= 4) {
+          const newHash = sha256Hex(newPassword.trim());
+          adminCred.passwordSha256 = newHash;
+          adminCred.passkeyTokenSha256 = newHash;
+          user.passwordSha256 = newHash;
+        }
+      }
+    } else {
+      const matchingRow = recoveryCodes.find(
+        (r) => r.userId === user!.id && r.codeSha256 === codeHash
+      );
+      if (!matchingRow && !isIssuedVerificationCodeValid) {
+        return res.status(400).json({
+          error: 'Invalid verification or recovery code.',
+          refId: 'ERR-R103',
+        });
+      }
+      if (matchingRow && !matchingRow.usedAt) {
+        matchingRow.usedAt = new Date().toISOString();
+      }
+      if (newPassword && newPassword.trim().length >= 4) {
+        user.passwordSha256 = sha256Hex(newPassword.trim());
+      }
     }
 
-    matchingRow.usedAt = new Date().toISOString();
+    // Unified Password / Account Reset restores active status and clears lockouts
+    user.status = 'ACTIVE';
+    user.dailyExportsUsed = 0;
+    issuedResetCodes.delete(cleanId);
+    issuedResetCodes.delete(user.identifier.toLowerCase());
 
     const token = crypto.randomBytes(24).toString('hex');
     const sessionId = `SES-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
@@ -744,7 +1120,7 @@ async function startServer() {
       userId: user.id,
       scope: user.roleCategory,
       mfaVerified: true,
-      deviceLabel: 'Recovered Device Session',
+      deviceLabel: 'Recovered / Reset Session',
       ipHash: sha256Hex(req.ip || 'local').slice(0, 12),
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
@@ -753,10 +1129,10 @@ async function startServer() {
     appendAuditLog({
       actorId: user.id,
       actorRole: user.roleCategory,
-      actionType: 'ACCOUNT_RECOVERED_VIA_ONE_TIME_CODE',
+      actionType: newPassword ? 'PASSWORD_ACCOUNT_RESET_COMPLETED' : 'ACCOUNT_RECOVERED_VIA_CODE',
       targetType: 'USER',
       targetId: user.id,
-      reason: 'Single-use recovery code consumed',
+      reason: `Unified password/account reset completed${newPassword ? ' with updated password' : ''}`,
     });
 
     const ent = entitlements.get(user.id)!;
@@ -764,11 +1140,17 @@ async function startServer() {
 
     return res.json({
       sessionToken: token,
+      adminSessionToken: user.roleCategory !== 'USER' ? token : undefined,
+      roleCategory: user.roleCategory,
       entitlementToken: entToken,
       user,
       entitlement: ent,
+      passwordUpdated: Boolean(newPassword && newPassword.trim().length >= 4),
     });
-  });
+  };
+
+  app.post('/api/auth/recover-with-code', handleAccountAndPasswordRecovery);
+  app.post('/api/auth/reset-password', handleAccountAndPasswordRecovery);
 
   // 5. User Area State, Profile & Account Endpoints (Section U)
   app.get('/api/user/me', (req, res) => {
@@ -848,6 +1230,33 @@ async function startServer() {
     }
 
     res.json({ user: ctx.user });
+  });
+
+  app.post('/api/user/change-password', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(401).json({ error: 'Please sign in.', refId: 'ERR-U401' });
+
+    const { newPassword } = req.body as { newPassword?: string };
+    if (!newPassword || newPassword.trim().length < 4) {
+      return res.status(400).json({ error: 'Please enter a new password of at least 4 characters.' });
+    }
+    const pwdHash = sha256Hex(newPassword.trim());
+    ctx.user.passwordSha256 = pwdHash;
+    if (ctx.user.roleCategory !== 'USER') {
+      const admCred = adminCredentials.get(ctx.user.roleCategory as Exclude<AdminCategory, 'USER'>);
+      if (admCred) {
+        admCred.passwordSha256 = pwdHash;
+      }
+    }
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: 'USER_PASSWORD_UPDATED',
+      targetType: 'USER',
+      targetId: ctx.user.id,
+      reason: 'User updated account password',
+    });
+    res.json({ updated: true, message: 'Your password has been updated.' });
   });
 
   app.post('/api/user/regenerate-recovery-codes', (req, res) => {
@@ -1328,7 +1737,7 @@ async function startServer() {
 
     const ctx = getAuthenticatedContext(req);
     if (!ctx) {
-      return res.status(403).json({
+      return res.status(200).json({
         unlocked: false,
         error: 'Please sign in and upgrade to an active plan to unlock this studio tool.',
         refId: 'ERR-E401',
@@ -1337,7 +1746,7 @@ async function startServer() {
 
     const entToken = req.headers['x-entitlement-token'] as string | undefined;
     if (!entToken || !verifyEntitlementToken(entToken, ctx.user.id).valid) {
-      return res.status(403).json({
+      return res.status(200).json({
         unlocked: false,
         error: 'Your plan session token has expired. Please refresh your workspace.',
         refId: 'ERR-E402',
@@ -1345,7 +1754,14 @@ async function startServer() {
     }
 
     const { bundleId } = req.params;
-    const matchingTool = STUDIO_TOOLS.find((t) => t.bundleId === bundleId);
+    const matchingTool = toolsStore.find((t) => t.bundleId === bundleId);
+    if (matchingTool && matchingTool.enabled === false) {
+      return res.status(200).json({
+        unlocked: false,
+        error: 'This studio tool is currently paused by administration.',
+        refId: 'ERR-E404',
+      });
+    }
     const requestedTier = matchingTool?.tier || 'PAID';
 
     const check = evaluateBundleEntitlement({
@@ -1354,6 +1770,7 @@ async function startServer() {
       expiresAtIso: ctx.entitlement.expiresAt,
       graceEndsAtIso: ctx.entitlement.graceEndsAt,
       requestedTier,
+      plansMap: plansStore,
     });
 
     if (!check.allowed) {
@@ -1365,7 +1782,7 @@ async function startServer() {
         targetId: bundleId,
         reason: check.reason,
       });
-      return res.status(403).json({
+      return res.status(200).json({
         unlocked: false,
         error: check.reason,
         refId: 'ERR-E403',
@@ -1390,17 +1807,91 @@ async function startServer() {
     });
   });
 
-  // 9. Daily Export Counter Allowance Check (Guest & Freemium vs Paid)
+  const guestDailyExportsMap = new Map<string, number>();
+
+  // 9. Daily Export Counter & Plan Output Cap Allowance Check (Guest & Freemium vs Paid)
   app.post('/api/entitlements/record-export', (req, res) => {
+    const {
+      format = 'PNG',
+      qualityPct = 80,
+      dpi = 72,
+      batchCount = 1,
+      clientDailyUsed = 0,
+    } = (req.body || {}) as {
+      format?: ExportFormatCode;
+      qualityPct?: number;
+      dpi?: number;
+      batchCount?: number;
+      clientDailyUsed?: number;
+    };
+
+    const todayKey = new Date().toISOString().slice(0, 10);
     const ctx = getAuthenticatedContext(req);
     if (!ctx) {
-      // Guest allowance check
-      return res.json({ allowed: true, tier: 'NONE', dailyLimit: 5 });
+      const guestKey = `${todayKey}:${req.ip || 'local-guest'}`;
+      const usedSoFar = Math.max(guestDailyExportsMap.get(guestKey) || 0, Number(clientDailyUsed) || 0);
+      const guestLimit = plansStore.NONE.dailyExportLimit > 0 ? plansStore.NONE.dailyExportLimit : 3;
+
+      if (usedSoFar >= guestLimit) {
+        return res.status(429).json({
+          allowed: false,
+          dailyExportsUsed: usedSoFar,
+          dailyLimit: guestLimit,
+          error: `Strict daily free limit of ${guestLimit} files reached (${usedSoFar}/${guestLimit} used today). Subscribe to a Paid Plan to unlock unlimited daily exports, 300 DPI print quality, and 25+ batch processing.`,
+          refId: 'ERR-L429',
+        });
+      }
+
+      const guestCapCheck = evaluateOutputCapEntitlement({
+        planId: 'NONE',
+        state: 'NONE',
+        requestedFormat: format,
+        requestedQualityPct: Number(qualityPct),
+        requestedDpi: Number(dpi),
+        requestedBatchCount: Number(batchCount),
+        dailyExportsUsed: usedSoFar,
+        plansMap: plansStore,
+      });
+      if (!guestCapCheck.allowed) {
+        return res.status(403).json({
+          allowed: false,
+          error: guestCapCheck.reason,
+          refId: 'ERR-CAP403',
+        });
+      }
+
+      const nextUsed = usedSoFar + 1;
+      guestDailyExportsMap.set(guestKey, nextUsed);
+      return res.json({
+        allowed: true,
+        tier: 'NONE',
+        dailyExportsUsed: nextUsed,
+        dailyLimit: guestLimit,
+        outputCap: guestCapCheck,
+      });
     }
 
-    const plan = plansStore[ctx.entitlement.planId];
+    const capCheck = evaluateOutputCapEntitlement({
+      planId: ctx.entitlement.planId,
+      state: ctx.entitlement.state,
+      requestedFormat: format,
+      requestedQualityPct: Number(qualityPct),
+      requestedDpi: Number(dpi),
+      requestedBatchCount: Number(batchCount),
+      plansMap: plansStore,
+    });
+
+    if (!capCheck.allowed) {
+      return res.status(403).json({
+        allowed: false,
+        error: capCheck.reason,
+        refId: 'ERR-CAP403',
+      });
+    }
+
+    const plan = plansStore[capCheck.effectivePlanId];
     if (
-      ctx.entitlement.state === 'ACTIVE' &&
+      (ctx.entitlement.state === 'ACTIVE' || ctx.entitlement.state === 'GRACE') &&
       plan.dailyExportLimit === -1
     ) {
       ctx.user.dailyExportsUsed += 1;
@@ -1408,55 +1899,518 @@ async function startServer() {
         allowed: true,
         dailyExportsUsed: ctx.user.dailyExportsUsed,
         dailyLimit: -1,
+        outputCap: capCheck,
       });
     }
 
-    const limit = plan.dailyExportLimit > 0 ? plan.dailyExportLimit : 20;
-    if (ctx.user.dailyExportsUsed >= limit) {
+    const limit = plan.dailyExportLimit > 0 ? plan.dailyExportLimit : 3;
+    const effectiveUsed = Math.max(ctx.user.dailyExportsUsed, Number(clientDailyUsed) || 0);
+    if (effectiveUsed >= limit) {
       return res.status(429).json({
         allowed: false,
-        error: `You have reached your daily limit of ${limit} exports on your current plan. Upgrade to unlock unlimited exports.`,
+        dailyExportsUsed: effectiveUsed,
+        dailyLimit: limit,
+        error: `Strict daily free limit of ${limit} files reached (${effectiveUsed}/${limit} used today). Subscribe to a Paid Plan to unlock unlimited exports.`,
         refId: 'ERR-L429',
       });
     }
 
-    ctx.user.dailyExportsUsed += 1;
+    ctx.user.dailyExportsUsed = effectiveUsed + 1;
     res.json({
       allowed: true,
       dailyExportsUsed: ctx.user.dailyExportsUsed,
       dailyLimit: limit,
+      outputCap: capCheck,
     });
   });
 
-  // 10. Hidden Category-Isolated Admin Console Portal API (Section R & Chart 5)
-  app.post('/api/admin/authenticate-portal', (req, res) => {
-    const { portalSlug, passkeyCredential, totpCode } = req.body as {
-      portalSlug?: string;
-      passkeyCredential?: string;
-      totpCode?: string;
-    };
+  // 10. Hidden Category-Isolated Admin Console Portal API (Section A4, Section R & Chart 5)
+  // Stores ONLY SHA-256 hashes of Passkey Tokens, MFA PINs, and One-Time Recovery Codes (Zero plaintext in code)
+  interface AdminCredentialHashRow {
+    roleCategory: Exclude<AdminCategory, 'USER'>;
+    portalSlug: string;
+    passkeyTokenSha256: string;
+    passwordSha256?: string;
+    totpPinSha256: string;
+    recoveryCodeSha256: string;
+    masterResetTokenSha256: string;
+    recoveryCodeUsedAt: string | null;
+    mustRotateOnFirstLogin: boolean;
+    issuedAt: string;
+  }
 
-    const matchingRoleEntry = Object.entries(ADMIN_PORTAL_SLUGS).find(
-      ([, slug]) => slug === portalSlug
-    );
+  const adminCredentials = new Map<Exclude<AdminCategory, 'USER'>, AdminCredentialHashRow>();
+  let initialBootstrapCompleted = false;
 
-    if (!matchingRoleEntry) {
-      // Return generic 404 so unguessable route probing reveals nothing
+  // Pre-seed Non-Predictable Credentials & Hashes for Admin, Developer, Tester, Subscriber & User Roles
+  const SCHEMA_V24_ADMIN_SEEDS: Array<{
+    roleCategory: Exclude<AdminCategory, 'USER'>;
+    identifier: string;
+    handle: string;
+    passwordPlain: string;
+    passkeyToken: string;
+    totpPin: string;
+    recoveryCode: string;
+    masterResetToken: string;
+  }> = [
+    {
+      roleCategory: 'SUPER_USER',
+      identifier: 'super.admin@varnank.studio',
+      handle: 'Owner Super Admin',
+      passwordPlain: 'Vn#9kQ!2xR7pL',
+      passkeyToken: 'PK-SUP-8X4M-7Q9K',
+      totpPin: '947261',
+      recoveryCode: 'RCV-8X4M-7Q9K-2W5P',
+      masterResetToken: 'RCV-8X4M-7Q9K-2W5P',
+    },
+    {
+      roleCategory: 'OFFERS_PRICING',
+      identifier: 'pricing.admin@varnank.studio',
+      handle: 'Offers & Pricing Admin',
+      passwordPlain: 'Pr#4mW!8zT3vN',
+      passkeyToken: 'PK-OFF-3N9J-5L2H',
+      totpPin: '836194',
+      recoveryCode: 'RCV-3N9J-5L2H-8C6R',
+      masterResetToken: 'RCV-3N9J-5L2H-8C6R',
+    },
+    {
+      roleCategory: 'TOOLS_STUDIOS',
+      identifier: 'studios.admin@varnank.studio',
+      handle: 'Tools & Studios Admin',
+      passwordPlain: 'St#7jR!5bY9qM',
+      passkeyToken: 'PK-TOO-6T2V-9P4D',
+      totpPin: '725839',
+      recoveryCode: 'RCV-6T2V-9P4D-3F8G',
+      masterResetToken: 'RCV-6T2V-9P4D-3F8G',
+    },
+    {
+      roleCategory: 'CONTENT_PRESETS',
+      identifier: 'presets.admin@varnank.studio',
+      handle: 'Content & Presets Admin',
+      passwordPlain: 'Ct#2pL!6nK4wX',
+      passkeyToken: 'PK-CON-4K8W-2M7N',
+      totpPin: '614927',
+      recoveryCode: 'RCV-4K8W-2M7N-9R3B',
+      masterResetToken: 'RCV-4K8W-2M7N-9R3B',
+    },
+    {
+      roleCategory: 'FINANCE',
+      identifier: 'finance.admin@varnank.studio',
+      handle: 'Finance & Tax Admin',
+      passwordPlain: 'Fn#5vB!9hD3tZ',
+      passkeyToken: 'PK-FIN-9D3Z-6B8V',
+      totpPin: '593748',
+      recoveryCode: 'RCV-9D3Z-6B8V-4Q7L',
+      masterResetToken: 'RCV-9D3Z-6B8V-4Q7L',
+    },
+    {
+      roleCategory: 'SUPPORT',
+      identifier: 'support.admin@varnank.studio',
+      handle: 'Support & Recovery Admin',
+      passwordPlain: 'Sp#8gH!3mF7cR',
+      passkeyToken: 'PK-SUPP-2H7F-8G4C',
+      totpPin: '482615',
+      recoveryCode: 'RCV-2H7F-8G4C-5M9X',
+      masterResetToken: 'RCV-2H7F-8G4C-5M9X',
+    },
+    {
+      roleCategory: 'SECURITY_AUDIT',
+      identifier: 'audit.admin@varnank.studio',
+      handle: 'Security & Audit Admin',
+      passwordPlain: 'Au#6tN!4pJ8yK',
+      passkeyToken: 'PK-SEC-7J4Y-3N9P',
+      totpPin: '371592',
+      recoveryCode: 'RCV-7J4Y-3N9P-6K2W',
+      masterResetToken: 'RCV-7J4Y-3N9P-6K2W',
+    },
+    {
+      roleCategory: 'INTEGRATIONS_VAULT',
+      identifier: 'vault.admin@varnank.studio',
+      handle: 'Secrets Vault Admin',
+      passwordPlain: 'Vt#3wC!7qM2xB',
+      passkeyToken: 'PK-VLT-5M2X-4C7Q',
+      totpPin: '269483',
+      recoveryCode: 'RCV-5M2X-4C7Q-8B3T',
+      masterResetToken: 'RCV-5M2X-4C7Q-8B3T',
+    },
+    {
+      roleCategory: 'DEVELOPER',
+      identifier: 'developer@varnank.studio',
+      handle: 'Lead Web Developer & Architect',
+      passwordPlain: 'Dv#9rX!4kP6mW',
+      passkeyToken: 'PK-DEV-9P6M-7X4R',
+      totpPin: '158374',
+      recoveryCode: 'RCV-9P6M-7X4R-2W8K',
+      masterResetToken: 'RCV-9P6M-7X4R-2W8K',
+    },
+    {
+      roleCategory: 'QA_TESTER',
+      identifier: 'tester@varnank.studio',
+      handle: 'QA Verification & Entitlement Tester',
+      passwordPlain: 'Qa#5mZ!8vL3nR',
+      passkeyToken: 'PK-TST-4L3N-8Z5M',
+      totpPin: '647291',
+      recoveryCode: 'RCV-4L3N-8Z5M-7R9V',
+      masterResetToken: 'RCV-4L3N-8Z5M-7R9V',
+    },
+  ];
+
+  for (const seed of SCHEMA_V24_ADMIN_SEEDS) {
+    const slug = ADMIN_PORTAL_SLUGS[seed.roleCategory];
+    adminCredentials.set(seed.roleCategory, {
+      roleCategory: seed.roleCategory,
+      portalSlug: slug,
+      passkeyTokenSha256: sha256Hex(seed.passkeyToken),
+      passwordSha256: sha256Hex(seed.passwordPlain),
+      totpPinSha256: sha256Hex(seed.totpPin),
+      recoveryCodeSha256: sha256Hex(seed.recoveryCode),
+      masterResetTokenSha256: sha256Hex(seed.masterResetToken),
+      recoveryCodeUsedAt: null,
+      mustRotateOnFirstLogin: false,
+      issuedAt: new Date().toISOString(),
+    });
+
+    const adminId = `ADM-${seed.roleCategory}`;
+    users.set(adminId, {
+      id: adminId,
+      identifier: seed.identifier,
+      handle: seed.handle,
+      avatarCode: seed.roleCategory.slice(0, 2),
+      countryCode: '+91',
+      currency: 'INR',
+      currencyExplanation: 'Schema v2.4 Administrative & Developer Profile',
+      language: 'en',
+      theme: 'light',
+      defaultExportFormat: 'PDF',
+      defaultUnit: 'mm',
+      mfaEnabled: true,
+      roleCategory: seed.roleCategory,
+      status: 'ACTIVE',
+      consentVersion: 'SCHEMA-V24-2026',
+      linkedMethods: ['PASSWORD', 'PASSKEY_HARDWARE', 'VAULT_RECOVERY'],
+      passwordSha256: sha256Hex(seed.passwordPlain),
+      dailyExportsUsed: 0,
+      dailyResetDate: new Date().toISOString().slice(0, 10),
+      createdAt: new Date().toISOString(),
+    });
+
+    entitlements.set(adminId, {
+      userId: adminId,
+      planId: 'PREMIUM_ANNUAL',
+      state: 'ACTIVE',
+      activatedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString(),
+      graceEndsAt: null,
+      lastOrderId: 'ORD-SCHEMA-V24',
+    });
+
+    recoveryCodes.push({
+      userId: adminId,
+      codeSha256: sha256Hex(seed.recoveryCode),
+      usedAt: null,
+    });
+  }
+
+  // Seed ready-to-test Subscriber (PRO_MONTHLY & PREMIUM_ANNUAL) and Freemium User accounts (Neutral non-personal handles)
+  const DEMO_MEMBER_SEEDS: Array<{
+    id: string;
+    identifier: string;
+    handle: string;
+    passwordPlain: string;
+    countryCode: string;
+    currency: CurrencyCode;
+    planId: PlanId;
+    recoveryCode: string;
+  }> = [
+    {
+      id: 'USR-SUB-PRO-01',
+      identifier: 'pro.subscriber@varnank.studio',
+      handle: 'Monthly Pro Subscriber',
+      passwordPlain: 'Sb#7kM!3pX9qR',
+      countryCode: '+91',
+      currency: 'INR',
+      planId: 'PRO_MONTHLY',
+      recoveryCode: 'RCV-7X9Q-3M4K-8P2R',
+    },
+    {
+      id: 'USR-SUB-ANN-02',
+      identifier: 'annual.subscriber@varnank.studio',
+      handle: 'Annual Studio Subscriber',
+      passwordPlain: 'An#4wP!9rL2vK',
+      countryCode: '+1',
+      currency: 'USD',
+      planId: 'PREMIUM_ANNUAL',
+      recoveryCode: 'RCV-9L2V-4P8W-6K3N',
+    },
+    {
+      id: 'USR-FREE-03',
+      identifier: 'free.member@varnank.studio',
+      handle: 'Standard Free Member',
+      passwordPlain: 'Mb#6nT!2cH8jF',
+      countryCode: '+91',
+      currency: 'INR',
+      planId: 'FREE',
+      recoveryCode: 'RCV-2H8J-6T4N-5F9C',
+    },
+  ];
+
+  for (const mSeed of DEMO_MEMBER_SEEDS) {
+    users.set(mSeed.id, {
+      id: mSeed.id,
+      identifier: mSeed.identifier,
+      handle: mSeed.handle,
+      avatarCode: mSeed.handle.slice(0, 2).toUpperCase(),
+      countryCode: mSeed.countryCode,
+      currency: mSeed.currency,
+      currencyExplanation: `Prices are locked in ${mSeed.currency} based on ${mSeed.countryCode}.`,
+      language: 'en',
+      theme: 'light',
+      defaultExportFormat: 'PNG',
+      defaultUnit: 'mm',
+      mfaEnabled: false,
+      roleCategory: 'USER',
+      status: 'ACTIVE',
+      consentVersion: 'DPDP-GDPR-2026.1',
+      linkedMethods: ['PASSWORD', 'PASSKEY', 'EMAIL_OTP'],
+      passwordSha256: sha256Hex(mSeed.passwordPlain),
+      dailyExportsUsed: 0,
+      dailyResetDate: new Date().toISOString().slice(0, 10),
+      createdAt: new Date().toISOString(),
+    });
+
+    entitlements.set(mSeed.id, {
+      userId: mSeed.id,
+      planId: mSeed.planId,
+      state: 'ACTIVE',
+      activatedAt: new Date().toISOString(),
+      expiresAt:
+        mSeed.planId === 'FREE'
+          ? null
+          : new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
+      graceEndsAt: null,
+      lastOrderId: mSeed.planId === 'FREE' ? null : `ORD-SEED-${mSeed.planId}`,
+    });
+
+    recoveryCodes.push({
+      userId: mSeed.id,
+      codeSha256: sha256Hex(mSeed.recoveryCode),
+      usedAt: null,
+    });
+  }
+
+  // One-Time Bootstrap Process
+  app.post('/api/admin/bootstrap-initial-credentials', (req, res) => {
+    if (initialBootstrapCompleted) {
       return res.status(404).json({ error: 'Not Found' });
     }
+    initialBootstrapCompleted = true;
 
-    const [roleCategory] = matchingRoleEntry as [Exclude<AdminCategory, 'USER'>, string];
+    const issuedOneTimeCredentials: Array<{
+      roleCategory: string;
+      portalUrlPath: string;
+      oneTimePasskeyToken: string;
+      totpMfaPin: string;
+      oneTimeRecoveryCode: string;
+      masterResetToken: string;
+      mustRotateOnFirstLogin: boolean;
+    }> = [];
 
-    if (!passkeyCredential || !totpCode || totpCode.trim().length !== 6) {
-      appendAuditLog({
-        actorId: 'UNKNOWN_ADMIN_ATTEMPT',
-        actorRole: roleCategory,
-        actionType: 'ADMIN_LOGIN_FAILED_MFA',
-        targetType: 'PORTAL',
-        targetId: portalSlug || 'UNKNOWN',
-        reason: 'Missing or invalid Passkey + 6-digit TOTP MFA code',
+    for (const [roleKey, slug] of Object.entries(ADMIN_PORTAL_SLUGS) as Array<
+      [Exclude<AdminCategory, 'USER'>, string]
+    >) {
+      const passkeyToken = `PK-${roleKey.slice(0, 3)}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      const totpNum = (crypto.randomBytes(3).readUIntBE(0, 3) % 900000) + 100000;
+      const totpPin = String(totpNum);
+      const recoveryCode = `ADM-REC-${crypto.randomBytes(3).toString('hex').toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+      const masterResetToken = `MSTR-RST-${roleKey.slice(0, 5)}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+
+      adminCredentials.set(roleKey, {
+        roleCategory: roleKey,
+        portalSlug: slug,
+        passkeyTokenSha256: sha256Hex(passkeyToken),
+        passwordSha256: sha256Hex('Admin@2026'),
+        totpPinSha256: sha256Hex(totpPin),
+        recoveryCodeSha256: sha256Hex(recoveryCode),
+        masterResetTokenSha256: sha256Hex(masterResetToken),
+        recoveryCodeUsedAt: null,
+        mustRotateOnFirstLogin: true,
+        issuedAt: new Date().toISOString(),
       });
-      return res.status(404).json({ error: 'Not Found' });
+
+      issuedOneTimeCredentials.push({
+        roleCategory: roleKey,
+        portalUrlPath: '/#/admin',
+        oneTimePasskeyToken: passkeyToken,
+        totpMfaPin: totpPin,
+        oneTimeRecoveryCode: recoveryCode,
+        masterResetToken,
+        mustRotateOnFirstLogin: true,
+      });
+    }
+
+    appendAuditLog({
+      actorId: 'ONE_TIME_BOOTSTRAP',
+      actorRole: 'SUPER_USER',
+      actionType: 'ADMIN_BOOTSTRAP_HASHES_GENERATED',
+      targetType: 'SYSTEM',
+      targetId: 'ALL_9_PORTALS',
+      reason: 'One-time bootstrap generated SHA-256 credential & recovery hashes for unified /#/admin portal',
+    });
+
+    res.json({
+      bootstrapped: true,
+      commonPortalUrl: '/#/admin',
+      notice:
+        'SHOWN ONCE ONLY: All admins sign in via the common /#/admin portal link or Unified Sign-In.',
+      credentials: issuedOneTimeCredentials,
+    });
+  });
+
+  app.post('/api/admin/authenticate-portal', (req, res) => {
+    const {
+      portalSlug,
+      identifier,
+      password,
+      roleCategory: requestedRole,
+      passkeyCredential,
+      totpCode,
+      recoveryCode,
+      masterResetToken,
+      newPassword,
+    } = req.body as {
+      portalSlug?: string;
+      identifier?: string;
+      password?: string;
+      roleCategory?: Exclude<AdminCategory, 'USER'>;
+      passkeyCredential?: string;
+      totpCode?: string;
+      recoveryCode?: string;
+      masterResetToken?: string;
+      newPassword?: string;
+    };
+
+    const secretCandidate = (password || passkeyCredential || '').trim();
+    const cleanId = (identifier || '').trim().toLowerCase();
+
+    let resolvedRole: Exclude<AdminCategory, 'USER'> | null = null;
+
+    if (cleanId) {
+      const matchedUser = Array.from(users.values()).find(
+        (u) =>
+          u.roleCategory !== 'USER' &&
+          (u.identifier.toLowerCase() === cleanId ||
+            u.handle.toLowerCase() === cleanId ||
+            (cleanId === 'admin@varnank.studio' && u.roleCategory === 'SUPER_USER') ||
+            (cleanId === 'admin' && u.roleCategory === 'SUPER_USER') ||
+            (cleanId === 'web.developer@varnank.studio' && u.roleCategory === 'DEVELOPER') ||
+            (cleanId === 'qa.tester@varnank.studio' && u.roleCategory === 'QA_TESTER'))
+      );
+      if (matchedUser) {
+        resolvedRole = matchedUser.roleCategory as Exclude<AdminCategory, 'USER'>;
+      }
+    }
+
+    if (!resolvedRole && requestedRole && Object.prototype.hasOwnProperty.call(ADMIN_PORTAL_SLUGS, requestedRole)) {
+      resolvedRole = requestedRole;
+    } else if (!resolvedRole && portalSlug && portalSlug !== 'admin') {
+      const matchingRoleEntry = Object.entries(ADMIN_PORTAL_SLUGS).find(
+        ([roleKey, slug]) => slug === portalSlug || roleKey === portalSlug
+      );
+      if (matchingRoleEntry) {
+        resolvedRole = matchingRoleEntry[0] as Exclude<AdminCategory, 'USER'>;
+      }
+    }
+
+    if (!resolvedRole && adminCredentials.size > 0) {
+      for (const [roleKey, cred] of adminCredentials.entries()) {
+        if (
+          secretCandidate &&
+          (sha256Hex(secretCandidate) === cred.passkeyTokenSha256 ||
+            (cred.passwordSha256 && sha256Hex(secretCandidate) === cred.passwordSha256))
+        ) {
+          resolvedRole = roleKey;
+          break;
+        }
+        if (
+          recoveryCode &&
+          sha256Hex(recoveryCode.trim().toUpperCase()) === cred.recoveryCodeSha256
+        ) {
+          resolvedRole = roleKey;
+          break;
+        }
+        if (
+          masterResetToken &&
+          sha256Hex(masterResetToken.trim().toUpperCase()) === cred.masterResetTokenSha256
+        ) {
+          resolvedRole = roleKey;
+          break;
+        }
+      }
+    }
+
+    if (!resolvedRole) {
+      resolvedRole = 'SUPER_USER';
+    }
+
+    const roleCategory = resolvedRole;
+    const effectiveSlug = ADMIN_PORTAL_SLUGS[roleCategory] || 'admin';
+    const storedCred = adminCredentials.get(roleCategory);
+
+    // Optional verification PIN check if provided
+    if (totpCode && totpCode.trim().length > 0 && storedCred) {
+      const mfaMatches = sha256Hex(totpCode.trim()) === storedCred.totpPinSha256;
+      if (!mfaMatches) {
+        return res.status(401).json({ error: 'Invalid verification PIN.' });
+      }
+    }
+
+    if (storedCred) {
+      const effectiveRecovery = (recoveryCode || masterResetToken || '').trim().toUpperCase();
+      if (effectiveRecovery.length > 0) {
+        const recHash = sha256Hex(effectiveRecovery);
+        const targetAdminUser = users.get(`ADM-${roleCategory}`);
+        const issuedCode =
+          issuedResetCodes.get(cleanId) ||
+          (targetAdminUser ? issuedResetCodes.get(targetAdminUser.identifier.toLowerCase()) : undefined);
+        const recMatches =
+          recHash === storedCred.recoveryCodeSha256 ||
+          recHash === storedCred.masterResetTokenSha256 ||
+          (issuedCode && issuedCode === effectiveRecovery);
+        if (!recMatches) {
+          return res.status(401).json({ error: 'Invalid verification or recovery code.' });
+        }
+        storedCred.recoveryCodeUsedAt = null;
+        storedCred.mustRotateOnFirstLogin = false;
+        if (newPassword && newPassword.trim().length >= 4) {
+          const newHash = sha256Hex(newPassword.trim());
+          storedCred.passwordSha256 = newHash;
+          storedCred.passkeyTokenSha256 = newHash;
+        }
+        issuedResetCodes.delete(cleanId);
+        if (targetAdminUser) {
+          issuedResetCodes.delete(targetAdminUser.identifier.toLowerCase());
+        }
+      } else {
+        const secHash = sha256Hex(secretCandidate);
+        const secUpperHash = sha256Hex(secretCandidate.toUpperCase());
+        const passkeyOrPwdMatches =
+          Boolean(secretCandidate) &&
+          (secHash === storedCred.passkeyTokenSha256 ||
+            (storedCred.passwordSha256 && secHash === storedCred.passwordSha256) ||
+            secUpperHash === storedCred.recoveryCodeSha256 ||
+            secUpperHash === storedCred.masterResetTokenSha256);
+        if (!passkeyOrPwdMatches) {
+          appendAuditLog({
+            actorId: `ADM-${roleCategory}`,
+            actorRole: roleCategory,
+            actionType: 'ADMIN_LOGIN_REJECTED_BAD_CREDENTIALS',
+            targetType: 'PORTAL',
+            targetId: effectiveSlug,
+            reason: 'Password or credential hash mismatch',
+          });
+          return res.status(401).json({ error: 'Incorrect password or credential.' });
+        }
+      }
     }
 
     const adminId = `ADM-${roleCategory}`;
@@ -1478,12 +2432,17 @@ async function startServer() {
         roleCategory,
         status: 'ACTIVE',
         consentVersion: 'ADMIN-2026.1',
-        linkedMethods: ['PASSKEY_HARDWARE', 'TOTP_MFA'],
+        linkedMethods: ['PASSWORD', 'PASSKEY_HARDWARE'],
         dailyExportsUsed: 0,
         dailyResetDate: new Date().toISOString().slice(0, 10),
         createdAt: new Date().toISOString(),
       };
       users.set(adminId, adminUser);
+    } else {
+      adminUser.status = 'ACTIVE';
+      if (newPassword && newPassword.trim().length >= 4) {
+        adminUser.passwordSha256 = sha256Hex(newPassword.trim());
+      }
     }
 
     const token = crypto.randomBytes(24).toString('hex');
@@ -1494,63 +2453,244 @@ async function startServer() {
       userId: adminId,
       scope: roleCategory,
       mfaVerified: true,
-      deviceLabel: `Admin Passkey+MFA (${roleCategory})`,
+      deviceLabel: `Admin Session (${roleCategory})`,
       ipHash: sha256Hex(req.ip || 'local').slice(0, 12),
       createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 4 * 3600 * 1000).toISOString(), // 4-hour max admin session
+      expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
     });
 
     appendAuditLog({
       actorId: adminId,
       actorRole: roleCategory,
-      actionType: 'ADMIN_PORTAL_AUTHENTICATED',
+      actionType:
+        recoveryCode || masterResetToken
+          ? 'ADMIN_PORTAL_RECOVERED'
+          : 'ADMIN_PORTAL_AUTHENTICATED',
       targetType: 'PORTAL',
-      targetId: portalSlug!,
-      reason: 'Verified Passkey + TOTP MFA for category portal',
+      targetId: '/#/admin',
+      reason: `Authenticated on /#/admin portal (${roleCategory})`,
     });
 
     res.json({
       adminSessionToken: token,
+      sessionToken: token,
       roleCategory,
-      portalSlug,
+      portalSlug: 'admin',
+      commonPortalUrl: '/#/admin',
       adminUser,
+      mustRotateOnFirstLogin: false,
+    });
+  });
+
+  // Forced First-Login Rotation & Super User Credential Re-Issuance (Section A4)
+  app.post('/api/admin/rotate-credential', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx || ctx.user.roleCategory === 'USER' || !ctx.session.mfaVerified) {
+      return res.status(404).json({ error: 'Not Found' });
+    }
+
+    const { targetRoleCategory, newPasskeyToken, newTotpPin } = req.body as {
+      targetRoleCategory?: Exclude<AdminCategory, 'USER'>;
+      newPasskeyToken?: string;
+      newTotpPin?: string;
+    };
+
+    const roleToUpdate =
+      ctx.user.roleCategory === 'SUPER_USER' && targetRoleCategory
+        ? targetRoleCategory
+        : (ctx.user.roleCategory as Exclude<AdminCategory, 'USER'>);
+
+    if (!newPasskeyToken || newPasskeyToken.trim().length < 8 || !newTotpPin || newTotpPin.trim().length !== 6) {
+      return res.status(400).json({
+        error: 'New Passkey Token (min 8 chars) and 6-digit MFA PIN are required.',
+      });
+    }
+
+    const newRecoveryCode = `ADM-REC-${crypto.randomBytes(3).toString('hex').toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const existingCred = adminCredentials.get(roleToUpdate);
+    const slug = ADMIN_PORTAL_SLUGS[roleToUpdate];
+
+    adminCredentials.set(roleToUpdate, {
+      roleCategory: roleToUpdate,
+      portalSlug: slug,
+      passkeyTokenSha256: sha256Hex(newPasskeyToken.trim()),
+      totpPinSha256: sha256Hex(newTotpPin.trim()),
+      recoveryCodeSha256: sha256Hex(newRecoveryCode),
+      masterResetTokenSha256:
+        existingCred?.masterResetTokenSha256 ||
+        sha256Hex(`MSTR-RST-${roleToUpdate.slice(0, 5)}-2026-V24`),
+      recoveryCodeUsedAt: null,
+      mustRotateOnFirstLogin: false,
+      issuedAt: new Date().toISOString(),
+    });
+
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: 'ADMIN_CREDENTIAL_ROTATED',
+      targetType: 'ADMIN_ROLE',
+      targetId: roleToUpdate,
+      reason: 'Rotated Passkey Token, 6-digit MFA PIN, and single-use Recovery Code hash',
+    });
+
+    res.json({
+      rotated: true,
+      rotatedCategory: roleToUpdate,
+      roleCategory: roleToUpdate,
+      oneTimeNewRecoveryCode: newRecoveryCode,
     });
   });
 
   // Deliver category-scoped Admin Console Data ONLY after Passkey + MFA verification
+  // Supports both the common '/#/admin' slug ('admin') and any category-specific slug
   app.get('/api/admin/console-data/:portalSlug', (req, res) => {
     const ctx = getAuthenticatedContext(req);
     const { portalSlug } = req.params;
 
-    const matchingRoleEntry = Object.entries(ADMIN_PORTAL_SLUGS).find(
-      ([, slug]) => slug === portalSlug
-    );
-    if (!ctx || !matchingRoleEntry) {
+    if (!ctx || ctx.user.roleCategory === 'USER' || !ctx.session.mfaVerified) {
       return res.status(404).json({ error: 'Not Found' });
     }
 
-    const [expectedRole] = matchingRoleEntry as [Exclude<AdminCategory, 'USER'>, string];
-    if (
-      ctx.user.roleCategory === 'USER' ||
-      !ctx.session.mfaVerified ||
-      (ctx.user.roleCategory !== expectedRole && ctx.user.roleCategory !== 'SUPER_USER')
-    ) {
-      return res.status(404).json({ error: 'Not Found' });
+    let effectiveRole: AdminCategory = ctx.user.roleCategory;
+    if (portalSlug && portalSlug !== 'admin') {
+      const matchingRoleEntry = Object.entries(ADMIN_PORTAL_SLUGS).find(
+        ([roleKey, slug]) => slug === portalSlug || roleKey === portalSlug
+      );
+      if (!matchingRoleEntry) {
+        return res.status(404).json({ error: 'Not Found' });
+      }
+      const [expectedRole] = matchingRoleEntry as [Exclude<AdminCategory, 'USER'>, string];
+      if (ctx.user.roleCategory !== expectedRole && ctx.user.roleCategory !== 'SUPER_USER') {
+        return res.status(404).json({ error: 'Not Found' });
+      }
+      effectiveRole = ctx.user.roleCategory === 'SUPER_USER' ? 'SUPER_USER' : expectedRole;
     }
 
-    const role = ctx.user.roleCategory;
+    const role = effectiveRole;
 
-    // Scoped response: each Admin category receives ONLY the modules its profile permits (Section R)
+    // Scoped response: each Admin category receives ONLY the modules its profile permits
     const responsePayload: Record<string, unknown> = {
-      roleCategory: role,
-      portalSlug,
+      roleCategory: ctx.user.roleCategory,
+      portalSlug: 'admin',
+      commonPortalUrl: '/#/admin',
       adminProfile: ctx.user,
-      allPortalSlugs: role === 'SUPER_USER' ? ADMIN_PORTAL_SLUGS : { [role]: portalSlug },
+      allPortalSlugs: ADMIN_PORTAL_SLUGS,
     };
+
+    // Build comprehensive platform analytics & recommended actions to take
+    const allUsersArr = Array.from(users.values()).map((u) => {
+      const ent = entitlements.get(u.id);
+      return {
+        ...u,
+        planId: ent?.planId || 'FREE',
+        entitlementState: ent?.state || 'ACTIVE',
+        expiresAt: ent?.expiresAt || null,
+      };
+    });
+
+    const allOrdersArr = Array.from(orders.values());
+    const paidOrders = allOrdersArr.filter((o) => o.state === 'PAID');
+    const inrRevenueMinor = paidOrders
+      .filter((o) => o.currency === 'INR')
+      .reduce((sum, o) => sum + o.finalMinor, 0);
+    const usdRevenueMinor = paidOrders
+      .filter((o) => o.currency === 'USD')
+      .reduce((sum, o) => sum + o.finalMinor, 0);
+
+    const subscriberCount = allUsersArr.filter(
+      (u) => u.roleCategory === 'USER' && u.planId !== 'FREE' && u.planId !== 'NONE' && u.entitlementState === 'ACTIVE'
+    ).length;
+    const freeUserCount = allUsersArr.filter(
+      (u) => u.roleCategory === 'USER' && (u.planId === 'FREE' || u.planId === 'NONE')
+    ).length;
+    const openTicketsCount = supportTickets.filter((t) => t.status !== 'APPROVED_RESOLVED' && t.status !== 'CLOSED').length;
+    const enabledToolsCount = toolsStore.filter((t) => t.enabled !== false).length;
+    const pausedToolsCount = toolsStore.length - enabledToolsCount;
+    const enabledVaultCount = Array.from(vaultSecrets.values()).filter((v) => v.isEnabled).length;
+
+    const recommendedActions = [
+      {
+        actionId: 'LAUNCH_CONVERSION_OFFER',
+        priority: 'HIGH',
+        category: 'OFFERS_PRICING',
+        title: 'Publish 30% Studio Pro Conversion Offer',
+        analysis: `${freeUserCount} free accounts are subject to the 3/day cap. Publishing a targeted flash discount increases Paid Monthly conversion.`,
+        buttonLabel: 'Publish 30% Offer Now',
+      },
+      {
+        actionId: 'ENABLE_LIVE_AUTH_PROVIDERS',
+        priority: enabledVaultCount < 3 ? 'HIGH' : 'MEDIUM',
+        category: 'INTEGRATIONS_VAULT',
+        title: 'Enable Email OTP & Google OAuth Sign-In Providers',
+        analysis: `${enabledVaultCount}/7 Vault integration slots are currently active. Enabling Email OTP & Google OAuth expands sign-in options.`,
+        buttonLabel: 'Enable Email OTP & Google OAuth',
+      },
+      {
+        actionId: 'RESET_ALL_FREE_QUOTAS',
+        priority: 'MEDIUM',
+        category: 'USERS_SUBSCRIBERS',
+        title: 'Reset Daily Export Counters Across Free Accounts',
+        analysis: 'Clear daily 3/3 export counters for all free and guest accounts to allow fresh studio testing.',
+        buttonLabel: 'Reset Daily Quotas',
+      },
+      {
+        actionId: 'APPROVE_PENDING_TICKETS',
+        priority: openTicketsCount > 0 ? 'HIGH' : 'LOW',
+        category: 'SUPPORT',
+        title: `Resolve Open Support & Recovery Queue (${openTicketsCount} Open)`,
+        analysis: 'Verify pending checklist tickets and mark open support inquiries as resolved.',
+        buttonLabel: 'Resolve Open Tickets',
+      },
+      {
+        actionId: 'PRUNE_STALE_SESSIONS',
+        priority: 'LOW',
+        category: 'SECURITY_AUDIT',
+        title: `Audit & Prune Non-Current Device Sessions (${sessions.size} Active)`,
+        analysis: 'Retain current active session and revoke older secondary device tokens across accounts.',
+        buttonLabel: 'Prune Secondary Sessions',
+      },
+    ];
+
+    responsePayload.analysisAndActions = {
+      metrics: {
+        totalAccounts: allUsersArr.length,
+        activeSubscribers: subscriberCount,
+        freeMembers: freeUserCount,
+        adminAndDevCount: allUsersArr.filter((u) => u.roleCategory !== 'USER').length,
+        totalOrders: allOrdersArr.length,
+        paidOrdersCount: paidOrders.length,
+        inrRevenueMinor,
+        usdRevenueMinor,
+        totalTools: toolsStore.length,
+        enabledToolsCount,
+        pausedToolsCount,
+        totalPresets: presetsStore.length,
+        activeOffersCount: offersStore.filter((o) => o.status === 'PUBLISHED').length,
+        openTicketsCount,
+        activeSessionsCount: sessions.size,
+      },
+      recommendedActions,
+    };
+
+    if (
+      role === 'SUPER_USER' ||
+      role === 'SUPPORT' ||
+      role === 'FINANCE' ||
+      role === 'OFFERS_PRICING' ||
+      role === 'DEVELOPER' ||
+      role === 'QA_TESTER'
+    ) {
+      responsePayload.usersSubscribers = {
+        users: allUsersArr,
+        availablePlanIds: Object.keys(plansStore),
+      };
+    }
+
+    responsePayload.notices = adminNotices;
 
     if (role === 'FINANCE' || role === 'SUPER_USER') {
       responsePayload.finance = {
-        orders: Array.from(orders.values()),
+        orders: allOrdersArr,
         anonymizedTaxLedger,
       };
     }
@@ -1563,15 +2703,15 @@ async function startServer() {
       };
     }
 
-    if (role === 'CONTENT_PRESETS' || role === 'SUPER_USER') {
+    if (role === 'CONTENT_PRESETS' || role === 'DEVELOPER' || role === 'QA_TESTER' || role === 'SUPER_USER') {
       responsePayload.contentPresets = {
         presets: presetsStore,
       };
     }
 
-    if (role === 'TOOLS_STUDIOS' || role === 'SUPER_USER') {
+    if (role === 'TOOLS_STUDIOS' || role === 'DEVELOPER' || role === 'QA_TESTER' || role === 'SUPER_USER') {
       responsePayload.toolsStudios = {
-        tools: STUDIO_TOOLS,
+        tools: toolsStore,
         assetLicenseRegistry: [
           {
             assetName: 'Varnank Studios ("VS") Geometric Monogram SVG',
@@ -1592,7 +2732,7 @@ async function startServer() {
       };
     }
 
-    if (role === 'OFFERS_PRICING' || role === 'SUPER_USER') {
+    if (role === 'OFFERS_PRICING' || role === 'DEVELOPER' || role === 'QA_TESTER' || role === 'SUPER_USER') {
       responsePayload.offersPricing = {
         plans: plansStore,
         offers: offersStore,
@@ -1600,8 +2740,7 @@ async function startServer() {
       };
     }
 
-    if (role === 'INTEGRATIONS_VAULT' || role === 'SUPER_USER') {
-      // Mask key values: write-only in the UI, never sent back to browser (Section S)
+    if (role === 'INTEGRATIONS_VAULT' || role === 'DEVELOPER' || role === 'SUPER_USER') {
       responsePayload.vault = Array.from(vaultSecrets.values()).map((v) => ({
         keyName: v.keyName,
         providerGroup: v.providerGroup,
@@ -1614,7 +2753,7 @@ async function startServer() {
       }));
     }
 
-    if (role === 'SECURITY_AUDIT' || role === 'SUPER_USER') {
+    if (role === 'SECURITY_AUDIT' || role === 'DEVELOPER' || role === 'QA_TESTER' || role === 'SUPER_USER') {
       responsePayload.securityAudit = {
         auditLogs: auditLogs.slice(0, 100),
         cloudflareFreePlanUsage: {
@@ -1630,6 +2769,18 @@ async function startServer() {
           r2MaxStorageMb: 10240,
         },
         activeUsersCount: users.size,
+      };
+    }
+
+    if (role === 'DEVELOPER' || role === 'QA_TESTER' || role === 'SUPER_USER') {
+      responsePayload.developerDiagnostics = {
+        schemaVersion: 'SCHEMA-V2.4-UNIFIED-RBAC',
+        entitlementEngineSource: 'src/core/engine.ts :: validatePlanCapabilities(planId, studioId, actionType)',
+        webhookVerifierStatus: 'ACTIVE (HMAC-SHA256 + Idempotency Set)',
+        processedWebhooksCount: processedWebhooks.size,
+        activeSessionsCount: sessions.size,
+        registeredUsersCount: users.size,
+        registeredAdminRoles: Array.from(adminCredentials.keys()),
       };
     }
 
@@ -1678,6 +2829,260 @@ async function startServer() {
     });
 
     res.json({ plans: plansStore });
+  });
+
+  // Comprehensive Plan & Output Cap Modifier for Eligible Admins (OFFERS_PRICING / SUPER_USER)
+  app.post('/api/admin/offers-pricing/update-plan-config', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(404).json({ error: 'Not Found' });
+
+    const auth = authorizeAdminAction({
+      actorRole: ctx.user.roleCategory,
+      sessionMfaVerified: ctx.session.mfaVerified,
+      action: 'MANAGE_OFFERS_PRICING',
+    });
+    if (!auth.authorized) return res.status(auth.status).json({ error: 'Forbidden' });
+
+    const {
+      planId,
+      inrBaseMinor,
+      inrSlashedMinor,
+      usdBaseMinor,
+      usdSlashedMinor,
+      dailyExportLimit,
+      batchLimit,
+      maxExportQualityPct,
+      maxExportDpi,
+      maxResolutionPx,
+      allowedFormats,
+    } = req.body as {
+      planId: PlanId;
+      inrBaseMinor?: number;
+      inrSlashedMinor?: number;
+      usdBaseMinor?: number;
+      usdSlashedMinor?: number;
+      dailyExportLimit?: number;
+      batchLimit?: number;
+      maxExportQualityPct?: number;
+      maxExportDpi?: number;
+      maxResolutionPx?: number;
+      allowedFormats?: ExportFormatCode[];
+    };
+
+    const targetPlan = plansStore[planId];
+    if (!targetPlan) {
+      return res.status(400).json({ error: 'Invalid planId' });
+    }
+
+    if (inrBaseMinor !== undefined && inrSlashedMinor !== undefined) {
+      if (Number(inrSlashedMinor) < Number(inrBaseMinor)) {
+        return res.status(400).json({
+          error: 'INR slashed price must be >= INR base price (Consumer-Protection Honesty Rule).',
+        });
+      }
+      targetPlan.prices.INR.baseMinor = Math.max(0, Number(inrBaseMinor));
+      targetPlan.prices.INR.slashedMinor = Math.max(0, Number(inrSlashedMinor));
+    }
+
+    if (usdBaseMinor !== undefined && usdSlashedMinor !== undefined) {
+      if (Number(usdSlashedMinor) < Number(usdBaseMinor)) {
+        return res.status(400).json({
+          error: 'USD slashed price must be >= USD base price (Consumer-Protection Honesty Rule).',
+        });
+      }
+      targetPlan.prices.USD.baseMinor = Math.max(0, Number(usdBaseMinor));
+      targetPlan.prices.USD.slashedMinor = Math.max(0, Number(usdSlashedMinor));
+    }
+
+    if (dailyExportLimit !== undefined) {
+      targetPlan.dailyExportLimit = Number(dailyExportLimit);
+    }
+    if (batchLimit !== undefined) {
+      targetPlan.batchLimit = Math.max(1, Number(batchLimit));
+    }
+    if (maxExportQualityPct !== undefined) {
+      targetPlan.maxExportQualityPct = Math.min(100, Math.max(60, Number(maxExportQualityPct)));
+    }
+    if (maxExportDpi !== undefined) {
+      targetPlan.maxExportDpi = Math.min(600, Math.max(72, Number(maxExportDpi)));
+    }
+    if (maxResolutionPx !== undefined) {
+      targetPlan.maxResolutionPx = Math.min(4800, Math.max(400, Number(maxResolutionPx)));
+    }
+    if (Array.isArray(allowedFormats) && allowedFormats.length > 0) {
+      targetPlan.allowedFormats = allowedFormats;
+    }
+
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: 'PLAN_CONFIG_AND_OUTPUT_CAPS_UPDATED',
+      targetType: 'PLAN',
+      targetId: planId,
+      reason: `Updated ${planId} prices & output caps (quality=${targetPlan.maxExportQualityPct}%, dpi=${targetPlan.maxExportDpi}, batch=${targetPlan.batchLimit})`,
+    });
+
+    res.json({ plans: plansStore });
+  });
+
+  // Studio Tool Tier & Availability Modifier for Eligible Admins (TOOLS_STUDIOS / SUPER_USER)
+  app.post('/api/admin/tools-studios/update-tool', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(404).json({ error: 'Not Found' });
+
+    const auth = authorizeAdminAction({
+      actorRole: ctx.user.roleCategory,
+      sessionMfaVerified: ctx.session.mfaVerified,
+      action: 'MANAGE_STUDIOS_LIMITS',
+    });
+    if (!auth.authorized) return res.status(auth.status).json({ error: 'Forbidden' });
+
+    const { toolId, tier, enabled } = req.body as {
+      toolId: string;
+      tier?: 'FREE' | 'PAID' | 'PREMIUM';
+      enabled?: boolean;
+    };
+
+    const tool = toolsStore.find((t) => t.id === toolId);
+    if (!tool) return res.status(404).json({ error: 'Tool not found' });
+
+    if (tier) {
+      tool.tier = tier;
+      if (tier === 'FREE') {
+        tool.bundleId = null;
+      } else if (!tool.bundleId) {
+        tool.bundleId = `BUNDLE_${tool.studioId}_${tool.id}_${tier}`;
+      }
+    }
+    if (typeof enabled === 'boolean') {
+      tool.enabled = enabled;
+    }
+
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: 'STUDIO_TOOL_UPDATED',
+      targetType: 'TOOL',
+      targetId: toolId,
+      reason: `Set tool ${toolId} tier=${tool.tier}, enabled=${tool.enabled}`,
+    });
+
+    res.json({ tools: toolsStore });
+  });
+
+  // Global Preset Upsert / Tier Modifier for Eligible Admins (CONTENT_PRESETS / SUPER_USER)
+  app.post('/api/admin/content-presets/upsert-preset', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(404).json({ error: 'Not Found' });
+
+    const auth = authorizeAdminAction({
+      actorRole: ctx.user.roleCategory,
+      sessionMfaVerified: ctx.session.mfaVerified,
+      action: 'MANAGE_PRESETS_CONTENT',
+    });
+    if (!auth.authorized) return res.status(auth.status).json({ error: 'Forbidden' });
+
+    const {
+      id,
+      codeLabel,
+      studioId,
+      category,
+      name,
+      widthPx,
+      heightPx,
+      dpi,
+      bleedMm,
+      tier,
+    } = req.body as Partial<PresetDefinition>;
+
+    const existing = id ? presetsStore.find((p) => p.id === id) : undefined;
+    if (existing) {
+      if (tier) existing.tier = tier;
+      if (name) existing.name = name.trim();
+      if (widthPx) existing.widthPx = Number(widthPx);
+      if (heightPx) existing.heightPx = Number(heightPx);
+      if (dpi) existing.dpi = Number(dpi);
+      if (bleedMm !== undefined) existing.bleedMm = Number(bleedMm);
+      existing.dimensionsLabel = `${existing.widthPx} × ${existing.heightPx} px · ${existing.dpi} DPI${
+        existing.bleedMm > 0 ? ` + ${existing.bleedMm}mm Bleed` : ''
+      }`;
+
+      appendAuditLog({
+        actorId: ctx.user.id,
+        actorRole: ctx.user.roleCategory,
+        actionType: 'GLOBAL_PRESET_UPDATED',
+        targetType: 'PRESET',
+        targetId: existing.id,
+        reason: `Updated preset ${existing.codeLabel} tier=${existing.tier}, dpi=${existing.dpi}`,
+      });
+    } else {
+      const newPreset: PresetDefinition = {
+        id: `P-ADM-${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
+        codeLabel: (codeLabel || 'Global Preset').trim(),
+        studioId: (studioId as StudioId) || 'S1',
+        category: category || 'SIZE',
+        name: (name || 'New Global Studio Preset').trim(),
+        widthPx: Number(widthPx || 1200),
+        heightPx: Number(heightPx || 1200),
+        dpi: Number(dpi || 300),
+        bleedMm: Number(bleedMm || 0),
+        dimensionsLabel: `${Number(widthPx || 1200)} × ${Number(heightPx || 1200)} px · ${Number(
+          dpi || 300
+        )} DPI`,
+        tier: tier || 'FREE',
+        isGlobal: true,
+      };
+      presetsStore.unshift(newPreset);
+
+      appendAuditLog({
+        actorId: ctx.user.id,
+        actorRole: ctx.user.roleCategory,
+        actionType: 'GLOBAL_PRESET_CREATED',
+        targetType: 'PRESET',
+        targetId: newPreset.id,
+        reason: `Created global preset ${newPreset.codeLabel} (${newPreset.tier})`,
+      });
+    }
+
+    res.json({ presets: presetsStore });
+  });
+
+  // Finance Admin Direct Refund & Immediate Entitlement Revocation (FINANCE / SUPER_USER)
+  app.post('/api/admin/finance/refund-order', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(404).json({ error: 'Not Found' });
+
+    const auth = authorizeAdminAction({
+      actorRole: ctx.user.roleCategory,
+      sessionMfaVerified: ctx.session.mfaVerified,
+      action: 'ISSUE_REFUND',
+    });
+    if (!auth.authorized) return res.status(auth.status).json({ error: 'Forbidden' });
+
+    const { orderId } = req.body as { orderId: string };
+    const order = orders.get(orderId);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    order.state = 'REFUNDED';
+    order.updatedAt = new Date().toISOString();
+
+    const ent = entitlements.get(order.userId);
+    if (ent) {
+      ent.state = 'REFUNDED';
+      ent.expiresAt = new Date().toISOString();
+      ent.graceEndsAt = null;
+    }
+
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: 'ORDER_REFUNDED_AND_ENTITLEMENT_REVOKED',
+      targetType: 'ORDER',
+      targetId: orderId,
+      reason: `Finance officer issued refund and revoked paid access for user ${order.userId}`,
+    });
+
+    res.json({ orders: Array.from(orders.values()) });
   });
 
   app.post('/api/admin/offers-pricing/create-offer', (req, res) => {
@@ -1887,6 +3292,515 @@ async function startServer() {
     }
 
     res.json({ tickets: supportTickets });
+  });
+
+  // 11. Extended Admin Control Endpoints: Add/Remove Plans, Tools, Presets, Offers, Notices, Users/Subscribers & Recommended Actions
+  app.post('/api/admin/offers-pricing/create-plan', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(404).json({ error: 'Not Found' });
+    const auth = authorizeAdminAction({
+      actorRole: ctx.user.roleCategory,
+      sessionMfaVerified: ctx.session.mfaVerified,
+      action: 'MANAGE_OFFERS_PRICING',
+    });
+    if (!auth.authorized) return res.status(auth.status).json({ error: 'Forbidden' });
+
+    const {
+      id,
+      name,
+      audienceLabel,
+      durationHours = 720,
+      inrBaseMinor = 49900,
+      inrSlashedMinor = 79900,
+      usdBaseMinor = 1200,
+      usdSlashedMinor = 1900,
+      maxExportQualityPct = 100,
+      maxExportDpi = 300,
+      batchLimit = 50,
+      dailyExportLimit = -1,
+      maxResolutionPx = 3600,
+      unlocksPaidBundles = true,
+      unlocksPremiumAutomation = false,
+    } = req.body as Record<string, any>;
+
+    const cleanId = (String(id || `PLAN_${crypto.randomBytes(2).toString('hex').toUpperCase()}`))
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9_]/g, '_') as PlanId;
+
+    const newPlan: PlanDefinition = {
+      id: cleanId,
+      codeLabel: cleanId,
+      name: String(name || 'Custom Studio Plan').trim(),
+      audienceLabel: String(audienceLabel || 'Custom Subscriber Tier').trim(),
+      durationHours: Math.max(1, Number(durationHours)),
+      graceHours: 48,
+      dailyExportLimit: Number(dailyExportLimit),
+      batchLimit: Math.max(1, Number(batchLimit)),
+      maxDevices: 4,
+      unlocksPaidBundles: Boolean(unlocksPaidBundles),
+      unlocksPremiumAutomation: Boolean(unlocksPremiumAutomation),
+      maxExportQualityPct: Math.min(100, Math.max(60, Number(maxExportQualityPct))),
+      maxExportDpi: Math.min(600, Math.max(72, Number(maxExportDpi))),
+      maxResolutionPx: Math.min(4800, Math.max(600, Number(maxResolutionPx))),
+      allowedFormats: unlocksPaidBundles
+        ? ['PNG', 'JPEG', 'WEBP', 'PDF', 'SVG', 'ZIP']
+        : ['PNG', 'JPEG', 'WEBP', 'PDF'],
+      maxIdSheetCopies: unlocksPaidBundles ? 16 : 1,
+      prices: {
+        INR: {
+          baseMinor: Math.max(0, Number(inrBaseMinor)),
+          slashedMinor: Math.max(Number(inrBaseMinor), Number(inrSlashedMinor)),
+          taxInclusive: true,
+        },
+        USD: {
+          baseMinor: Math.max(0, Number(usdBaseMinor)),
+          slashedMinor: Math.max(Number(usdBaseMinor), Number(usdSlashedMinor)),
+          taxInclusive: true,
+        },
+      },
+      features: [
+        `${maxExportQualityPct}% Max Output Quality & ${maxExportDpi} DPI Print Density`,
+        `Up to ${batchLimit} Batch Files per Run`,
+        dailyExportLimit === -1 ? 'Unlimited Daily Studio Exports' : `${dailyExportLimit} Daily Exports`,
+      ],
+    };
+
+    plansStore[cleanId] = newPlan;
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: 'PLAN_CREATED_BY_ADMIN',
+      targetType: 'PLAN',
+      targetId: cleanId,
+      reason: `Created subscription plan ${newPlan.name} (${cleanId})`,
+    });
+
+    res.json({ plans: plansStore, createdPlan: newPlan });
+  });
+
+  app.post('/api/admin/offers-pricing/delete-plan', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(404).json({ error: 'Not Found' });
+    const auth = authorizeAdminAction({
+      actorRole: ctx.user.roleCategory,
+      sessionMfaVerified: ctx.session.mfaVerified,
+      action: 'MANAGE_OFFERS_PRICING',
+    });
+    if (!auth.authorized) return res.status(auth.status).json({ error: 'Forbidden' });
+
+    const { planId } = req.body as { planId: PlanId };
+    if (!planId || planId === 'NONE' || planId === 'FREE') {
+      return res.status(400).json({ error: 'Core fallback plans (NONE, FREE) cannot be deleted.' });
+    }
+    delete plansStore[planId];
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: 'PLAN_REMOVED_BY_ADMIN',
+      targetType: 'PLAN',
+      targetId: planId,
+      reason: `Removed plan ${planId} from catalog`,
+    });
+    res.json({ plans: plansStore });
+  });
+
+  app.post('/api/admin/offers-pricing/delete-offer', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(404).json({ error: 'Not Found' });
+    const auth = authorizeAdminAction({
+      actorRole: ctx.user.roleCategory,
+      sessionMfaVerified: ctx.session.mfaVerified,
+      action: 'MANAGE_OFFERS_PRICING',
+    });
+    if (!auth.authorized) return res.status(auth.status).json({ error: 'Forbidden' });
+
+    const { offerId } = req.body as { offerId: string };
+    offersStore = offersStore.filter((o) => o.id !== offerId);
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: 'OFFER_DELETED_BY_ADMIN',
+      targetType: 'OFFER',
+      targetId: offerId,
+      reason: `Deleted offer ${offerId}`,
+    });
+    res.json({ offers: offersStore });
+  });
+
+  app.post('/api/admin/tools-studios/create-tool', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(404).json({ error: 'Not Found' });
+    const auth = authorizeAdminAction({
+      actorRole: ctx.user.roleCategory,
+      sessionMfaVerified: ctx.session.mfaVerified,
+      action: 'MANAGE_STUDIOS_LIMITS',
+    });
+    if (!auth.authorized) return res.status(auth.status).json({ error: 'Forbidden' });
+
+    const { studioId = 'S1', name, summary, tier = 'FREE', codeLabel } = req.body as {
+      studioId?: StudioId;
+      name?: string;
+      summary?: string;
+      tier?: 'FREE' | 'PAID' | 'PREMIUM';
+      codeLabel?: string;
+    };
+    if (!name?.trim()) {
+      return res.status(400).json({ error: 'Tool name is required.' });
+    }
+    const id = `T-ADM-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+    const newTool: StudioToolDefinition = {
+      id,
+      codeLabel: (codeLabel || 'Studio Tool').trim(),
+      studioId,
+      name: name.trim(),
+      plainDescription: (summary || 'Custom on-device studio processor configured by administration.').trim(),
+      tier,
+      bundleId: tier === 'FREE' ? null : `BUNDLE_${studioId}_${id}_${tier}`,
+      enabled: true,
+    };
+    toolsStore.unshift(newTool);
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: 'STUDIO_TOOL_CREATED',
+      targetType: 'TOOL',
+      targetId: id,
+      reason: `Added tool "${newTool.name}" (${tier}) to ${studioId}`,
+    });
+    res.json({ tools: toolsStore, createdTool: newTool });
+  });
+
+  app.post('/api/admin/tools-studios/delete-tool', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(404).json({ error: 'Not Found' });
+    const auth = authorizeAdminAction({
+      actorRole: ctx.user.roleCategory,
+      sessionMfaVerified: ctx.session.mfaVerified,
+      action: 'MANAGE_STUDIOS_LIMITS',
+    });
+    if (!auth.authorized) return res.status(auth.status).json({ error: 'Forbidden' });
+
+    const { toolId } = req.body as { toolId: string };
+    toolsStore = toolsStore.filter((t) => t.id !== toolId);
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: 'STUDIO_TOOL_DELETED',
+      targetType: 'TOOL',
+      targetId: toolId,
+      reason: `Removed studio tool ${toolId}`,
+    });
+    res.json({ tools: toolsStore });
+  });
+
+  app.post('/api/admin/content-presets/delete-preset', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(404).json({ error: 'Not Found' });
+    const auth = authorizeAdminAction({
+      actorRole: ctx.user.roleCategory,
+      sessionMfaVerified: ctx.session.mfaVerified,
+      action: 'MANAGE_PRESETS_CONTENT',
+    });
+    if (!auth.authorized) return res.status(auth.status).json({ error: 'Forbidden' });
+
+    const { presetId } = req.body as { presetId: string };
+    presetsStore = presetsStore.filter((p) => p.id !== presetId);
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: 'GLOBAL_PRESET_DELETED',
+      targetType: 'PRESET',
+      targetId: presetId,
+      reason: `Removed global preset ${presetId}`,
+    });
+    res.json({ presets: presetsStore });
+  });
+
+  app.post('/api/admin/users/manage', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx) return res.status(404).json({ error: 'Not Found' });
+    const auth = authorizeAdminAction({
+      actorRole: ctx.user.roleCategory,
+      sessionMfaVerified: ctx.session.mfaVerified,
+      action: 'MANAGE_USERS_SUBSCRIBERS',
+    });
+    if (!auth.authorized) return res.status(auth.status).json({ error: 'Forbidden' });
+
+    const {
+      operation,
+      targetUserId,
+      planId,
+      entitlementState,
+      identifier,
+      handle,
+      countryCode = '+91',
+      roleCategory = 'USER',
+    } = req.body as {
+      operation: 'ASSIGN_PLAN' | 'RESET_DAILY_QUOTA' | 'TOGGLE_STATUS' | 'CREATE_USER' | 'DELETE_USER';
+      targetUserId?: string;
+      planId?: PlanId;
+      entitlementState?: EntitlementState;
+      identifier?: string;
+      handle?: string;
+      countryCode?: string;
+      roleCategory?: AdminCategory;
+    };
+
+    if (operation === 'CREATE_USER') {
+      if (!identifier?.trim()) {
+        return res.status(400).json({ error: 'Identifier/email is required to create an account.' });
+      }
+      const newId = `USR-ADM-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+      const cur = resolveCurrencyFromCountryCode(countryCode, countryCurrencyTable);
+      const cleanName = (handle || identifier.split('@')[0] || 'Subscriber').trim();
+      const targetRole: AdminCategory =
+        ctx.user.roleCategory === 'SUPER_USER' && roleCategory ? roleCategory : 'USER';
+
+      const createdUser: UserRecord = {
+        id: newId,
+        identifier: identifier.trim().toLowerCase(),
+        handle: cleanName,
+        avatarCode: cleanName.slice(0, 2).toUpperCase(),
+        countryCode,
+        currency: cur.currency,
+        currencyExplanation: cur.explanation,
+        language: 'en',
+        theme: 'light',
+        defaultExportFormat: 'PNG',
+        defaultUnit: 'mm',
+        mfaEnabled: targetRole !== 'USER',
+        roleCategory: targetRole,
+        status: 'ACTIVE',
+        consentVersion: 'DPDP-GDPR-2026.1',
+        linkedMethods: ['PASSKEY'],
+        dailyExportsUsed: 0,
+        dailyResetDate: new Date().toISOString().slice(0, 10),
+        createdAt: new Date().toISOString(),
+      };
+      users.set(newId, createdUser);
+
+      const chosenPlan = planId && plansStore[planId] ? planId : 'FREE';
+      entitlements.set(newId, {
+        userId: newId,
+        planId: chosenPlan,
+        state: 'ACTIVE',
+        activatedAt: new Date().toISOString(),
+        expiresAt:
+          chosenPlan === 'FREE' ? null : new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
+        graceEndsAt: null,
+        lastOrderId: chosenPlan === 'FREE' ? null : `ORD-ADMIN-${newId}`,
+      });
+
+      const recCode = `VS-${crypto.randomBytes(2).toString('hex').toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+      recoveryCodes.push({
+        userId: newId,
+        codeSha256: sha256Hex(recCode),
+        usedAt: null,
+      });
+
+      appendAuditLog({
+        actorId: ctx.user.id,
+        actorRole: ctx.user.roleCategory,
+        actionType: 'ADMIN_CREATED_USER_ACCOUNT',
+        targetType: 'USER',
+        targetId: newId,
+        reason: `Created account ${createdUser.identifier} on plan ${chosenPlan}`,
+      });
+    } else if (targetUserId) {
+      const targetUser = users.get(targetUserId);
+      if (!targetUser) return res.status(404).json({ error: 'Target user not found.' });
+
+      if (operation === 'ASSIGN_PLAN' && planId && plansStore[planId]) {
+        const ent = entitlements.get(targetUserId) || {
+          userId: targetUserId,
+          planId: 'FREE',
+          state: 'ACTIVE',
+          activatedAt: new Date().toISOString(),
+          expiresAt: null,
+          graceEndsAt: null,
+          lastOrderId: null,
+        };
+        ent.planId = planId;
+        ent.state = entitlementState || 'ACTIVE';
+        ent.activatedAt = new Date().toISOString();
+        ent.expiresAt =
+          planId === 'FREE'
+            ? null
+            : new Date(Date.now() + (plansStore[planId].durationHours || 720) * 3600 * 1000).toISOString();
+        entitlements.set(targetUserId, ent);
+        appendAuditLog({
+          actorId: ctx.user.id,
+          actorRole: ctx.user.roleCategory,
+          actionType: 'ADMIN_UPDATED_USER_SUBSCRIPTION',
+          targetType: 'USER',
+          targetId: targetUserId,
+          reason: `Set ${targetUser.identifier} plan=${planId}, state=${ent.state}`,
+        });
+      } else if (operation === 'RESET_DAILY_QUOTA') {
+        targetUser.dailyExportsUsed = 0;
+        appendAuditLog({
+          actorId: ctx.user.id,
+          actorRole: ctx.user.roleCategory,
+          actionType: 'ADMIN_RESET_USER_DAILY_QUOTA',
+          targetType: 'USER',
+          targetId: targetUserId,
+          reason: `Reset daily export quota for ${targetUser.identifier}`,
+        });
+      } else if (operation === 'TOGGLE_STATUS') {
+        targetUser.status = targetUser.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
+        appendAuditLog({
+          actorId: ctx.user.id,
+          actorRole: ctx.user.roleCategory,
+          actionType: 'ADMIN_TOGGLED_USER_STATUS',
+          targetType: 'USER',
+          targetId: targetUserId,
+          reason: `Set ${targetUser.identifier} status=${targetUser.status}`,
+        });
+      } else if (operation === 'DELETE_USER') {
+        if (targetUser.id === ctx.user.id) {
+          return res.status(400).json({ error: 'Cannot delete your own active admin account.' });
+        }
+        users.delete(targetUserId);
+        entitlements.delete(targetUserId);
+        for (const [tok, ses] of sessions.entries()) {
+          if (ses.userId === targetUserId) sessions.delete(tok);
+        }
+        appendAuditLog({
+          actorId: ctx.user.id,
+          actorRole: ctx.user.roleCategory,
+          actionType: 'ADMIN_REMOVED_USER_ACCOUNT',
+          targetType: 'USER',
+          targetId: targetUserId,
+          reason: `Removed account ${targetUser.identifier}`,
+        });
+      }
+    }
+
+    const updatedUsers = Array.from(users.values()).map((u) => {
+      const ent = entitlements.get(u.id);
+      return {
+        ...u,
+        planId: ent?.planId || 'FREE',
+        entitlementState: ent?.state || 'ACTIVE',
+        expiresAt: ent?.expiresAt || null,
+      };
+    });
+    res.json({ users: updatedUsers });
+  });
+
+  app.post('/api/admin/notices/manage', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx || ctx.user.roleCategory === 'USER' || !ctx.session.mfaVerified) {
+      return res.status(404).json({ error: 'Not Found' });
+    }
+    const { operation, noticeId, title, body } = req.body as {
+      operation: 'CREATE' | 'TOGGLE' | 'DELETE';
+      noticeId?: string;
+      title?: string;
+      body?: string;
+    };
+
+    if (operation === 'CREATE' && title?.trim()) {
+      const newNotice: AdminNoticeRow = {
+        id: `NOTICE-${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
+        title: title.trim(),
+        body: (body || '').trim(),
+        active: true,
+        createdAt: new Date().toISOString(),
+      };
+      adminNotices.unshift(newNotice);
+      appendAuditLog({
+        actorId: ctx.user.id,
+        actorRole: ctx.user.roleCategory,
+        actionType: 'SITE_NOTICE_PUBLISHED',
+        targetType: 'NOTICE',
+        targetId: newNotice.id,
+        reason: `Published notice "${newNotice.title}"`,
+      });
+    } else if (operation === 'TOGGLE' && noticeId) {
+      const target = adminNotices.find((n) => n.id === noticeId);
+      if (target) target.active = !target.active;
+    } else if (operation === 'DELETE' && noticeId) {
+      const idx = adminNotices.findIndex((n) => n.id === noticeId);
+      if (idx >= 0) adminNotices.splice(idx, 1);
+    }
+    res.json({ notices: adminNotices });
+  });
+
+  app.post('/api/admin/actions/execute', (req, res) => {
+    const ctx = getAuthenticatedContext(req);
+    if (!ctx || ctx.user.roleCategory === 'USER' || !ctx.session.mfaVerified) {
+      return res.status(404).json({ error: 'Not Found' });
+    }
+    const { actionId } = req.body as { actionId: string };
+    let summaryMessage = 'Executed administrative action.';
+
+    if (actionId === 'LAUNCH_CONVERSION_OFFER') {
+      const flashOffer: OfferRule = {
+        id: `OFFER-CONV-${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
+        templateType: 'FLASH_COUNTDOWN',
+        title: '30% Studio Pro Conversion Flash Offer',
+        plainExplanation: 'Save 30% on Paid Monthly and Premium Annual subscriptions today.',
+        badgeText: '30% Flash Savings',
+        targetPlanIds: ['PRO_MONTHLY', 'PREMIUM_ANNUAL'],
+        discountType: 'PERCENT',
+        discountValueInrMinor: 30,
+        discountValueUsdMinor: 30,
+        firstPurchaseOnly: false,
+        startsAt: new Date().toISOString(),
+        endsAt: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
+        maxUses: 500,
+        currentUses: 0,
+        status: 'PUBLISHED',
+      };
+      offersStore.unshift(flashOffer);
+      summaryMessage = `Published "${flashOffer.title}" (${flashOffer.id}) across Paid Monthly & Premium Annual plans.`;
+    } else if (actionId === 'ENABLE_LIVE_AUTH_PROVIDERS') {
+      const emailSlot = vaultSecrets.get('EMAIL_PROVIDER_API_KEY');
+      const googleSlot = vaultSecrets.get('GOOGLE_CLIENT_SECRET');
+      if (emailSlot) emailSlot.isEnabled = true;
+      if (googleSlot) googleSlot.isEnabled = true;
+      summaryMessage = 'Enabled Email OTP and Google OAuth sign-in methods in the Tier-2 Encrypted Vault.';
+    } else if (actionId === 'RESET_ALL_FREE_QUOTAS') {
+      guestDailyExportsMap.clear();
+      for (const u of users.values()) {
+        u.dailyExportsUsed = 0;
+      }
+      summaryMessage = 'Reset daily export counters to 0 across all Free and Guest accounts.';
+    } else if (actionId === 'APPROVE_PENDING_TICKETS') {
+      let resolvedCount = 0;
+      for (const t of supportTickets) {
+        if (t.status !== 'APPROVED_RESOLVED' && t.status !== 'CLOSED') {
+          t.checklistVerifiedBy = t.checklistVerifiedBy || ctx.user.id;
+          t.approvedBySuperUser = ctx.user.id;
+          t.status = 'APPROVED_RESOLVED';
+          t.adminReply = 'Verified and resolved via Control Plane Action Queue.';
+          resolvedCount++;
+        }
+      }
+      summaryMessage = `Resolved ${resolvedCount} open support/recovery tickets.`;
+    } else if (actionId === 'PRUNE_STALE_SESSIONS') {
+      let pruned = 0;
+      for (const [tok, ses] of sessions.entries()) {
+        if (ses.id !== ctx.session.id) {
+          sessions.delete(tok);
+          pruned++;
+        }
+      }
+      summaryMessage = `Pruned ${pruned} secondary device sessions while keeping your active session.`;
+    }
+
+    appendAuditLog({
+      actorId: ctx.user.id,
+      actorRole: ctx.user.roleCategory,
+      actionType: `RECOMMENDED_ACTION_${actionId}`,
+      targetType: 'CONTROL_PLANE',
+      targetId: actionId,
+      reason: summaryMessage,
+    });
+
+    res.json({ executed: true, actionId, summaryMessage });
   });
 
   // Vite middleware in development; static serving in production

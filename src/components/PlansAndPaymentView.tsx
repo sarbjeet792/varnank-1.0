@@ -189,7 +189,7 @@ export const PlansAndPaymentView: React.FC<PlansAndPaymentViewProps> = ({
             <input
               id="input-buyer-gstin"
               type="text"
-              placeholder="e.g. 27AAAAA0000A1Z5"
+              placeholder="Enter tax registration code"
               value={buyerGstin}
               onChange={(e) => setBuyerGstin(e.target.value)}
               className="w-full min-h-[40px] px-3 py-1.5 text-xs font-mono rounded-lg bg-white dark:bg-[#1C1A18] border border-[#E7E2DA] dark:border-[#2E2B28]"
@@ -288,7 +288,7 @@ export const PlansAndPaymentView: React.FC<PlansAndPaymentViewProps> = ({
               >
                 <div className="space-y-4">
                   <div className="flex items-center justify-between text-xs text-[#57534E] dark:text-[#A8A29E] font-mono">
-                    <span>Plan {plan.codeLabel}</span>
+                    <span>{plan.codeLabel}</span>
                     {activeQuote?.appliedOfferBadge && (
                       <span className="text-[#B44C32] dark:text-[#E06D53] font-sans font-medium">
                         {activeQuote.appliedOfferBadge}
